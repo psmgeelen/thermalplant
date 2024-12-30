@@ -1,0 +1,51 @@
+version: 3.8
+
+services:
+  migrations:
+
+  database:
+    image: timescale/timescaledb
+    env_file:
+      - .env
+  dashboard:
+    image: grafana/grafana
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node_exporter
+    command:
+      - '--path.rootfs=/host'
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - '/:/host:ro,rslave'
+  twingate_connector:
+    container_name: ${CONTAINER_NAME1}
+    image: twingate/connector:latest
+    environment:
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      - TWINGATE_API_ENDPOINT=/connector.stock
+      - TWINGATE_NETWORK=${TENANT_NAME}
+      - TWINGATE_ACCESS_TOKEN=${ACCESS_TOKEN1}
+      - TWINGATE_REFRESH_TOKEN=${REFRESH_TOKEN1}
+      - TWINGATE_LOG_LEVEL=1
+    # sysctls:
+    #   net.ipv4.ping_group_range: "0 2147483647"
+    restart: always
+    env_file: .env
+    network_mode: "host"
+  twingate_connector2:
+      container_name: ${CONTAINER_NAME2}
+      image: twingate/connector:latest
+      environment:
+        - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+        - TWINGATE_API_ENDPOINT=/connector.stock
+        - TWINGATE_NETWORK=${TENANT_NAME}
+        - TWINGATE_ACCESS_TOKEN=${ACCESS_TOKEN2}
+        - TWINGATE_REFRESH_TOKEN=${REFRESH_TOKEN2}
+        - TWINGATE_LOG_LEVEL=1
+      # sysctls:
+      #   net.ipv4.ping_group_range: "0 2147483647"
+      restart: always
+      env_file: .env
+      network_mode: "host"
