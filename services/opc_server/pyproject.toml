@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "opc-server"
+version = "0.1.0"
+description = "For both the upper and lower sensor of the setup"
+authors = ["Pieter Geelen <pieter@geelen.io>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+rpi-gpio = "^0.7.1"
+asyncua = "^1.1.5"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "opc-scraper"
+version = "0.1.0"
+description = "Executes migrations at the start and scrapes the OPC server"
+authors = ["Pieter Geelen <pieter@geelen.io>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+sqlalchemy = "^2.0.37"
+psycopg2-binary = "^2.9.10"
+pandas = "^2.2.3"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -23,4 +23,7 @@ This project aims to showcase a predictive maintenance solution for a thermal-ba
 
 ## CI
 
-## Contributions
+## Resources
+* OPC-UA Library: 
+  * Repo: https://github.com/FreeOpcUa/opcua-asyncio
+  * Documentation: https://opcua-asyncio.readthedocs.io/en/latest/

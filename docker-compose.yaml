@@ -1,24 +1,59 @@
-version: 3.8
-
 services:
-  migrations:
-
-  database:
-    image: timescale/timescaledb
+  database: # dont change name as this impacts host name for OPC scraper
+    image: timescale/timescaledb:latest-pg17
+    restart: always
+    environment:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - timescaledb:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    networks:
+      - opc-network
     env_file:
       - .env
+    profiles:
+      - opc
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U myuser -d mydb" ]
+      interval: 3s
+      timeout: 5s
+      retries: 5
   dashboard:
     image: grafana/grafana
+    restart: always
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana:/var/lib/grafana
+    network_mode: "host"
+    profiles:
+      - infrastructure
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml  # Prometheus config filePrometheus web interface
+    network_mode: "host"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    profiles:
+      - infrastructure
   node_exporter:
-    image: quay.io/prometheus/node-exporter:latest
+    image: prom/node-exporter:latest
     container_name: node_exporter
+    restart: always
     command:
       - '--path.rootfs=/host'
-    network_mode: host
+    network_mode: "host"
     pid: host
-    restart: unless-stopped
     volumes:
       - '/:/host:ro,rslave'
+    profiles:
+      - infrastructure
   twingate_connector:
     container_name: ${CONTAINER_NAME1}
     image: twingate/connector:latest
@@ -29,23 +64,59 @@ services:
       - TWINGATE_ACCESS_TOKEN=${ACCESS_TOKEN1}
       - TWINGATE_REFRESH_TOKEN=${REFRESH_TOKEN1}
       - TWINGATE_LOG_LEVEL=1
-    # sysctls:
-    #   net.ipv4.ping_group_range: "0 2147483647"
     restart: always
     env_file: .env
     network_mode: "host"
+    profiles:
+      - infrastructure
   twingate_connector2:
-      container_name: ${CONTAINER_NAME2}
-      image: twingate/connector:latest
-      environment:
-        - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-        - TWINGATE_API_ENDPOINT=/connector.stock
-        - TWINGATE_NETWORK=${TENANT_NAME}
-        - TWINGATE_ACCESS_TOKEN=${ACCESS_TOKEN2}
-        - TWINGATE_REFRESH_TOKEN=${REFRESH_TOKEN2}
-        - TWINGATE_LOG_LEVEL=1
-      # sysctls:
-      #   net.ipv4.ping_group_range: "0 2147483647"
-      restart: always
-      env_file: .env
-      network_mode: "host"
+    container_name: ${CONTAINER_NAME2}
+    image: twingate/connector:latest
+    environment:
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      - TWINGATE_API_ENDPOINT=/connector.stock
+      - TWINGATE_NETWORK=${TENANT_NAME}
+      - TWINGATE_ACCESS_TOKEN=${ACCESS_TOKEN2}
+      - TWINGATE_REFRESH_TOKEN=${REFRESH_TOKEN2}
+      - TWINGATE_LOG_LEVEL=1
+    restart: always
+    env_file: .env
+    network_mode: "host"
+    profiles:
+      - infrastructure
+  opc_server:
+    build: ./services/opc_server/
+    restart: unless-stopped
+    env_file:
+      - .env
+    profiles:
+      - opc
+    networks:
+      - opc-network
+    depends_on:
+      database:
+        condition: service_healthy
+  opc_scraper:
+    build: ./services/opc_scraper/
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - opc-network
+    profiles:
+      - opc
+    depends_on:
+      database:
+        condition: service_healthy
+
+volumes:
+  grafana:
+    driver: local
+  opc-server:
+    driver: local
+  timescaledb:
+    driver: local
+
+networks:
+  opc-network:
+    driver: bridge
