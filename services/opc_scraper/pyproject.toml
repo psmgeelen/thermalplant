@@ -11,6 +11,7 @@ python = "^3.12"
 sqlalchemy = "^2.0.37"
 psycopg2-binary = "^2.9.10"
 pandas = "^2.2.3"
+asyncua = "^1.1.5"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.8.5"

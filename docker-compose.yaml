@@ -1,4 +1,16 @@
 services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    volumes:
+      - portainer:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: "host"
+    ports:
+      - "9443:9443"
+    restart: always
+    profiles:
+      - infrastructure
+      - fullstack
   database: # dont change name as this impacts host name for OPC scraper
     image: timescale/timescaledb:latest-pg17
     restart: always
@@ -17,8 +29,9 @@ services:
       - .env
     profiles:
       - opc
+      - fullstack
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U myuser -d mydb" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 3s
       timeout: 5s
       retries: 5
@@ -32,6 +45,7 @@ services:
     network_mode: "host"
     profiles:
       - infrastructure
+      - fullstack
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -42,6 +56,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
     profiles:
       - infrastructure
+      - fullstack
   node_exporter:
     image: prom/node-exporter:latest
     container_name: node_exporter
@@ -54,9 +69,11 @@ services:
       - '/:/host:ro,rslave'
     profiles:
       - infrastructure
+      - fullstack
   twingate_connector:
     container_name: ${CONTAINER_NAME1}
     image: twingate/connector:latest
+    pull_policy: always
     environment:
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
       - TWINGATE_API_ENDPOINT=/connector.stock
@@ -69,9 +86,11 @@ services:
     network_mode: "host"
     profiles:
       - infrastructure
+      - fullstack
   twingate_connector2:
     container_name: ${CONTAINER_NAME2}
     image: twingate/connector:latest
+    pull_policy: always
     environment:
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
       - TWINGATE_API_ENDPOINT=/connector.stock
@@ -84,6 +103,7 @@ services:
     network_mode: "host"
     profiles:
       - infrastructure
+      - fullstack
   opc_server:
     build: ./services/opc_server/
     restart: unless-stopped
@@ -91,6 +111,7 @@ services:
       - .env
     profiles:
       - opc
+      - fullstack
     networks:
       - opc-network
     depends_on:
@@ -105,6 +126,7 @@ services:
       - opc-network
     profiles:
       - opc
+      - fullstack
     depends_on:
       database:
         condition: service_healthy
@@ -115,6 +137,8 @@ volumes:
   opc-server:
     driver: local
   timescaledb:
+    driver: local
+  portainer:
     driver: local
 
 networks:
