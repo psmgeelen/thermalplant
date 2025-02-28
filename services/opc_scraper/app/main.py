@@ -171,6 +171,8 @@ class Scraper(object):
         ddl_statement = """CREATE TABLE IF NOT EXISTS sensor_data (
             id SERIAL, -- Auto-incremental ID
             timestamp TIMESTAMPTZ NOT NULL, -- Timestamp column
+            nodeid TEXT NOT NULL, -- Node ID
+            clientid TEXT NOT NULL, -- Client ID
             sensorname TEXT NOT NULL, -- Sensor name
             value DOUBLE PRECISION, -- Sensor value
             PRIMARY KEY (timestamp, sensorname) -- Composite key on timestamp and sensorname
@@ -244,17 +246,16 @@ class Scraper(object):
             else:
                 logger.info("Row limiting job is already scheduled.")
 
-    @staticmethod
-    async def fetch_sensor_data(OPC_SERVER_URL: str, sensor_nodes: dict[int, dict[str, str]]) -> list[dict[str, str | pd.Timestamp]] | None:
+    async def fetch_sensor_data(self, OPC_SERVER_URL: str, sensor_nodes: dict[int, dict[str, str]]) -> list[dict[
+        str, str | pd.Timestamp]] | None:
         """
         Fetch sensor data asynchronously from an OPC UA server for specified sensor nodes.
 
         This method connects to the specified OPC UA server and retrieves data from the
         given sensor nodes. Each sensor node is defined by its unique identifier
-        (`nodeId`) and name. The function collects the data, along with a timestamp,
-        and organizes it into a list of dictionaries. If any error occurs during the
-        data fetching process for a specific node, the error is logged, and the
-        fetching process continues for the remaining nodes.
+        (`nodeId`) and name. Using recursion, it explores deeper nodes within the
+        hierarchy, fetching values only from nodes of the 'Variable' NodeClass.
+        Errors are logged, and the fetching continues for remaining nodes.
 
         :param OPC_SERVER_URL: The URL of the OPC UA server to connect to.
         :type OPC_SERVER_URL: str
@@ -270,25 +271,78 @@ class Scraper(object):
         async with Client(OPC_SERVER_URL) as client:
             try:
                 logger.info(f"Connected to OPC UA server: {OPC_SERVER_URL}")
-                data = []
+                aggregated_data = []
+
                 for itemnr, sensor_node in sensor_nodes.items():
                     try:
-                        logger.info(f"Fetching data for node {itemnr}: {sensor_node["nodeId"]} with name: {sensor_node["name"]}")
+                        if 'sensor' in sensor_node['name'].lower():
+                            logger.info(
+                            f"Fetching data for node {itemnr}: {sensor_node['nodeId']} with name: {sensor_node['name']}")
+                            node = client.get_node(sensor_node["nodeId"])
 
-                        node = client.get_node(sensor_node["nodeId"])
-                        value = await node.read_value()
-                        timestamp = pd.Timestamp.now()
-                        logger.info(f"Fetched data from {sensor_node["name"]} ({sensor_node["nodeId"]}): {value} at {timestamp}")
+                            # Initiate recursive fetch process
+                            fetched_data = await self.traverse_and_fetch(node, client, sensor_node["name"])
+                            aggregated_data.extend(fetched_data)
+                        else:
+                            logger.info(
+                                f"Is not a sensor, skipping {itemnr}: {sensor_node['nodeId']} with name: {sensor_node['name']}")
 
-                        data.append({"timestamp": timestamp, "sensorname": sensor_node["name"], "value": value})
+
                     except Exception as sensor_error:
-                        logger.error(f"Error fetching data for sensor {sensor_node["name"]} ({sensor_node["nodeId"]}): {sensor_error}")
+                        logger.error(
+                            f"Error fetching data for sensor {sensor_node['name']} ({sensor_node['nodeId']}): {sensor_error}")
                         continue
 
-                return data
+                return aggregated_data
             except Exception as e:
                 logger.error(f"Failed to fetch sensor data from OPC UA server: {e}")
                 return []
+
+    async def traverse_and_fetch(self, node, client, sensor_name) -> dict[str, str | pd.Timestamp] | None:
+        """
+        Recursively fetch data from nodes, traversing the hierarchy. Only fetches data from Variable nodes.
+
+        :param node: The current node to analyze.
+        :param client: The OPC UA client instance.
+        :param sensor_name: Name of the sensor for logging purposes.
+        :return: List of fetched data records.
+        """
+        data = []
+        try:
+            node_class = await node.read_node_class()
+
+            if node_class == ua.NodeClass.Variable:
+                try:
+                    value = await node.read_value()
+                    timestamp = pd.Timestamp.now()
+                    logger.info(
+                        f"Fetched data from {sensor_name} (NodeId: {node.nodeid.to_string()}): {value} at {timestamp}")
+
+                    data.append({
+                        "timestamp": timestamp,
+                        "nodeid": node.nodeid.to_string(),
+                        "clientid": str(client),
+                        "sensorname": str(sensor_name),
+                        "value": value
+                    })
+                except Exception as value_error:
+                    logger.error(
+                        f"Error reading value for NodeId {node.nodeid.to_string()} of sensor {sensor_name}: {value_error}")
+
+            elif node_class == ua.NodeClass.Object:
+                try:
+                    children = await node.get_children()
+                    for child in children:
+                        child_data = await self.traverse_and_fetch(child, client, sensor_name)
+                        data.extend(child_data)
+                except Exception as traverse_error:
+                    logger.error(
+                        f"Error traversing Object NodeId {node.nodeid.to_string()} for sensor {sensor_name}: {traverse_error}")
+        except Exception as node_error:
+            logger.error(
+                f"Error reading NodeClass for NodeId {node.nodeid.to_string()} of sensor {sensor_name}: {node_error}")
+
+        return data
 
     @staticmethod
     async def fetch_sensors(OPC_SERVER_URL: str) -> dict[int, dict[str, str]]:
@@ -326,13 +380,11 @@ class Scraper(object):
                     logger.info(
                         f"Node: {node_id}, DisplayName: {display_name.Text}, NodeClass: {node_class.name}, NamespaceIndex: {node_id.NamespaceIndex}")
 
-                    # Only include Variable nodes in sensors
-                    if node_class == ua.NodeClass.Variable:
-                        sensor_nodes[count] = {
-                            "nodeId": sensor.nodeid,
-                            "name": display_name.Text
-                        }
-                        count += 1
+                    sensor_nodes[count] = {
+                        "nodeId": sensor.nodeid,
+                        "name": display_name.Text
+                    }
+                    count += 1
 
                 logger.info(f"Detected sensors: {sensor_nodes}")
                 return sensor_nodes
@@ -385,6 +437,7 @@ if __name__ == "__main__":
         db_database=os.environ["POSTGRES_DB"]
     )
     scraper.provision_table()
+    time.sleep(5)
 
     while True:
         try:

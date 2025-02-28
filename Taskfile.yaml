@@ -1,5 +1,4 @@
 version: '3'
-includes:
 tasks:
   ci:
     cmds:
