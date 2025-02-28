@@ -1,0 +1,6 @@
+version: '3'
+includes:
+tasks:
+  ci:
+    cmds:
+      - docker compose --profile=fullstack up -d

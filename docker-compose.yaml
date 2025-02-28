@@ -109,6 +109,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "4840:4840"
     profiles:
       - opc
       - fullstack

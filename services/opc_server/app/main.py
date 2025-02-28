@@ -18,11 +18,12 @@ class RandomSensor(object):
         self.sources = [
             {
                 "name": "random",
-                "datatype": ua.Variant(0, ua.VariantType.Double),
+                "datatype": ua.Variant(0.0, ua.VariantType.Double),
                 "historize": True,
                 "historize_length": 1000,
                 "func": self.read_value,
                 "writable": True
+
             },
         ]
 
@@ -38,7 +39,7 @@ class ThermalSensor(object):
         self.sources = [
             {
                 "name": "random",
-                "datatype": ua.Variant(0, ua.VariantType.Double),
+                "datatype": ua.Variant(0.0, ua.VariantType.Double),
                 "historize": True,
                 "historize_length": 1000,
                 "func": self.read_value,
@@ -87,9 +88,12 @@ async def main():
                 "name_device": device.name,
                 "name_source": source["name"],
                 "datatype": source["datatype"],
-                "declaredParam": await opcuaObject.add_variable(idx, source["name"], source["datatype"]),
+                "declaredParam": await opcuaObject.add_variable(idx, source["name"], source["datatype"].Value),
+                "initial_value": source["datatype"].Value,
                 "func": source["func"],
                 "historize": source["historize"],
+                "NodeId": "",
+                "DataType": source["datatype"].VariantType,
                 "historize_length": source["historize_length"],
                 "writable": source["writable"]
             }
@@ -116,6 +120,8 @@ async def main():
         for source in device["opcuaVars"]:
             if source["historize"]:
                 await server.historize_node_data_change(source["declaredParam"], period=None, count=source["historize_length"])
+                source["NodeId"] = source["declaredParam"].nodeid
+                logging.warning(f"Historized NodeId {source['NodeId']} with DataType {source['DataType']}")
 
     try:
         count = 0
@@ -123,9 +129,11 @@ async def main():
             await asyncio.sleep(1) ## Polling rate
             # Loop to do Measurements
             for component in opcuaComponents:
+                logging.warning(f"Processing device {component['name']}")
                 for source in component["opcuaVars"]:
-                    await source["declaredParam"].set_value(source["func"]())
-                    logging.warning(f"Writing value {source["func"]()} from device {source["name_device"]} to {source['name_source']}")
+                    new_value = source["func"]()
+                    await source["declaredParam"].set_value(new_value)
+                    logging.warning(f"Writing value {new_value} to variable {source['name_source']} under device {source['name_device']} with NodeId {source['NodeId']}")
 
     finally:
         # close connection, remove subscriptions, etc
