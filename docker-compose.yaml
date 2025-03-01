@@ -32,9 +32,9 @@ services:
       - fullstack
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
-      interval: 3s
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
   dashboard:
     image: grafana/grafana
     restart: always
