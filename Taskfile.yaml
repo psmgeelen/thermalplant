@@ -1,5 +1,40 @@
 version: '3'
 tasks:
+  default:
+    cmds:
+      - task --list-all
   ci:
+    cmds:
+      - docker compose --profile=fullstack up -d
+  system_deps:
+    cmds:
+      - sudo apt update && sudo apt upgrade -y
+      - sudo apt install wget curl git btop python3-rpi.gpio -y
+  install_pyenv:
+    deps:
+      - system_deps
+    cmds:
+      - curl -fsSL https://pyenv.run | bash
+      - echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+      - echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+      - echo 'eval "$(pyenv init - bash)"' >> ~/.bashrc
+  install_poetry:
+    deps:
+      - system_deps
+    cmds:
+      - curl -sSL https://install.python-poetry.org | python3 -
+      - echo 'export PATH="/home/thermalplant/.local/bin:$PATH"' >> ~/.bashrc
+  install_docker:
+    deps:
+      - system_deps
+    cmds:
+      - curl -fsSL https://get.docker.com -o get-docker.sh
+      - sudo sh get-docker.sh
+      - sudo apt-get install docker-compose-plugin
+      - sudo service docker start
+  deploy_full_stack:
+    deps:
+      - system_deps
+      - install_docker
     cmds:
       - docker compose --profile=fullstack up -d
