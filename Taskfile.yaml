@@ -35,8 +35,5 @@ tasks:
       - sudo apt-get install docker-compose-plugin
       - sudo service docker start
   deploy_full_stack:
-    deps:
-      - system_deps
-      - install_docker
     cmds:
       - docker compose --profile=fullstack up -d
