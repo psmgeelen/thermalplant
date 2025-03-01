@@ -12,7 +12,7 @@ services:
       - infrastructure
       - fullstack
   database: # dont change name as this impacts host name for OPC scraper
-    image: timescale/timescaledb:latest-pg17
+    image: timescale/timescaledb-ha:pg17
     restart: always
     environment:
       - PGDATA=/var/lib/postgresql/data/pgdata
