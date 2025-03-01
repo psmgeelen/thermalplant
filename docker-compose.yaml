@@ -15,12 +15,12 @@ services:
     image: timescale/timescaledb-ha:pg17
     restart: always
     environment:
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      - PGDATA=/home/postgres/pgdata/data/pgdata
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
     volumes:
-      - timescaledb:/var/lib/postgresql/data/pgdata
+      - timescaledb:/home/postgres/pgdata/data
     ports:
       - "${POSTGRES_PORT}:5432"
     networks:
@@ -136,18 +136,10 @@ services:
 volumes:
   grafana:
     driver: local
-    driver_opts:
-      type: none
-      device: ./data/grafana
-      o: bind,uid=1000,gid=1000
   opc-server:
     driver: local
   timescaledb:
     driver: local
-    driver_opts:
-      type: none
-      device: ./data/timescaledb
-      o: bind,uid=1000,gid=1000
   portainer:
     driver: local
 
