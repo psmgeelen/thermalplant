@@ -137,7 +137,9 @@ volumes:
   grafana:
     driver: local
     driver_opts:
-      device:  ./data/grafana
+      type: none
+      device: ./data/grafana
+      o: bind,uid=1000,gid=1000
   opc-server:
     driver: local
   timescaledb:
