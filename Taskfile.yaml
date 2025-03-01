@@ -7,9 +7,11 @@ tasks:
     cmds:
       - docker compose --profile=fullstack up -d
   system_deps:
+    run: once
     cmds:
       - sudo apt update && sudo apt upgrade -y
-      - sudo apt install wget curl git btop python3-rpi.gpio -y
+      - sudo apt install wget curl git btop python3-rpi.gpio npm -y
+      - sudo npm install -g @go-task/cli
   install_pyenv:
     deps:
       - system_deps
