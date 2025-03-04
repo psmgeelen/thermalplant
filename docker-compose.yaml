@@ -1,17 +1,18 @@
+---
 services:
   portainer:
     image: portainer/portainer-ce:latest
     volumes:
       - portainer:/data
       - /var/run/docker.sock:/var/run/docker.sock
-    network_mode: "host"
+    network_mode: host
     ports:
-      - "9443:9443"
+      - '9443:9443'
     restart: always
     profiles:
       - infrastructure
       - fullstack
-  database: # dont change name as this impacts host name for OPC scraper
+  database:
     image: timescale/timescaledb-ha:pg17
     restart: always
     environment:
@@ -22,7 +23,7 @@ services:
     volumes:
       - timescaledb:/home/postgres/pgdata/data
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - ${POSTGRES_PORT}:5432
     networks:
       - opc-network
     env_file:
@@ -42,7 +43,7 @@ services:
       - GF_INSTALL_PLUGINS=grafana-clock-panel
     volumes:
       - grafana:/var/lib/grafana
-    network_mode: "host"
+    network_mode: host
     profiles:
       - infrastructure
       - fullstack
@@ -50,10 +51,10 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     volumes:
-      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml  # Prometheus config filePrometheus web interface
-    network_mode: "host"
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
+    network_mode: host
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
+      - '--config.file=/etc/prometheus/prometheus.yml'
     profiles:
       - infrastructure
       - fullstack
@@ -63,10 +64,10 @@ services:
     restart: always
     command:
       - '--path.rootfs=/host'
-    network_mode: "host"
+    network_mode: host
     pid: host
     volumes:
-      - '/:/host:ro,rslave'
+      - /:/host:ro,rslave
     profiles:
       - infrastructure
       - fullstack
@@ -83,7 +84,7 @@ services:
       - TWINGATE_LOG_LEVEL=1
     restart: always
     env_file: .env
-    network_mode: "host"
+    network_mode: host
     profiles:
       - infrastructure
       - fullstack
@@ -100,17 +101,17 @@ services:
       - TWINGATE_LOG_LEVEL=1
     restart: always
     env_file: .env
-    network_mode: "host"
+    network_mode: host
     profiles:
       - infrastructure
       - fullstack
   opc_server:
     build: ./services/opc_server/
-    restart: unless-stopped
+    restart: always
     env_file:
       - .env
     ports:
-      - "4840:4840"
+      - '4840:4840'
     profiles:
       - opc
       - fullstack
@@ -121,7 +122,7 @@ services:
         condition: service_healthy
   opc_scraper:
     build: ./services/opc_scraper/
-    restart: unless-stopped
+    restart: always
     env_file:
       - .env
     networks:
@@ -132,7 +133,17 @@ services:
     depends_on:
       database:
         condition: service_healthy
-
+  sensors:
+    build: ./services/sensors
+    restart: always
+    networks:
+    - opc-network
+    profiles:
+    - opc
+    - fullstack
+    depends_on:
+      database:
+        condition: service_healthy
 volumes:
   grafana:
     driver: local
@@ -142,7 +153,6 @@ volumes:
     driver: local
   portainer:
     driver: local
-
 networks:
   opc-network:
     driver: bridge

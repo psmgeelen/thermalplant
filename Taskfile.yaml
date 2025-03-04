@@ -2,38 +2,41 @@ version: '3'
 tasks:
   default:
     cmds:
-      - task --list-all
+    - task --list-all
   ci:
     cmds:
-      - docker compose --profile=fullstack up -d
+    - docker compose --profile=fullstack up -d
   system_deps:
     run: once
     cmds:
-      - sudo apt update && sudo apt upgrade -y
-      - sudo apt install wget curl git btop python3-rpi.gpio npm -y
-      - sudo npm install -g @go-task/cli
+    - sudo apt update && sudo apt upgrade -y
+    - sudo apt install wget curl git btop python3-rpi.gpio npm -y
+    - sudo npm install -g @go-task/cli
   install_pyenv:
     deps:
-      - system_deps
+    - system_deps
     cmds:
-      - curl -fsSL https://pyenv.run | bash
-      - echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
-      - echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
-      - echo 'eval "$(pyenv init - bash)"' >> ~/.bashrc
+    - curl -fsSL https://pyenv.run | bash
+    - echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+    - echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+    - echo 'eval "$(pyenv init - bash)"' >> ~/.bashrc
+    - sudo apt install -y make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev -y
   install_poetry:
     deps:
-      - system_deps
+    - system_deps
     cmds:
-      - curl -sSL https://install.python-poetry.org | python3 -
-      - echo 'export PATH="/home/thermalplant/.local/bin:$PATH"' >> ~/.bashrc
+    - curl -sSL https://install.python-poetry.org | python3 -
+    - echo 'export PATH="/home/thermalplant/.local/bin:$PATH"' >> ~/.bashrc
+    - source ~/.bashrc
+    - poetry config keyring.enabled false
   install_docker:
     deps:
-      - system_deps
+    - system_deps
     cmds:
-      - curl -fsSL https://get.docker.com -o get-docker.sh
-      - sudo sh get-docker.sh
-      - sudo apt-get install docker-compose-plugin
-      - sudo service docker start
+    - curl -fsSL https://get.docker.com -o get-docker.sh
+    - sudo sh get-docker.sh
+    - sudo apt-get install docker-compose-plugin
+    - sudo service docker start
   deploy_full_stack:
     cmds:
-      - docker compose --profile=fullstack up -d
+    - docker compose --profile=fullstack up -d
