@@ -27,3 +27,8 @@ This project aims to showcase a predictive maintenance solution for a thermal-ba
 * OPC-UA Library: 
   * Repo: https://github.com/FreeOpcUa/opcua-asyncio
   * Documentation: https://opcua-asyncio.readthedocs.io/en/latest/
+
+Note to self: install toolkit on high available DB
+```postgresql
+CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
+```
