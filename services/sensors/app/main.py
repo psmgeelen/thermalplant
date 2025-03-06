@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.openapi.utils import get_openapi
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -41,7 +41,7 @@ def my_schema():
             "name": "A project of geelen.io",
             "url": "https://github.com/psmgeelen/thermalplant",
         },
-        "license": {"name": "UNLICENSE", "url": "https://unlicense.org/"},
+        "license": {"name": "MIT", "url": "http://opensource.org/license/mit/"},
     }
     app.openapi_schema = openapi_schema
     return app.openapi_schema
