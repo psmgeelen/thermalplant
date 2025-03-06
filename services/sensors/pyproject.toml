@@ -1,4 +1,4 @@
-[tool.poetry]
+ [tool.poetry]
 name = "sensors"
 version = "0.1.0"
 description = "An API for wrapping the sensor logic"
@@ -10,8 +10,6 @@ readme = "README.md"
 python = "^3.12"
 fastapi = "^0.97.0"
 pydantic = "^1.10.9"
-ruff = "^0.0.272"
-black = "^23.3.0"
 docformatter = "^1.7.2"
 fastapi-health = "^0.4.0"
 uvicorn = {extras = ["standard"], version = "^0.22.0"}
@@ -21,7 +19,11 @@ httpx = "^0.24.1"
 pytest = "^7.3.2"
 slowapi = "^0.1.8"
 gpiozero = "^2.0.1"
+spidev = "^3.6"
 
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.5"
 
 [build-system]
 requires = ["poetry-core"]

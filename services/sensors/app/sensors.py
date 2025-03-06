@@ -1,6 +1,4 @@
 import spidev
-import time
-
 
 class TempSensor:
     """
@@ -64,26 +62,3 @@ class TempSensor:
         """Close the SPI connection."""
         self.spi.close()
         print("SPI connection closed.")
-
-
-if __name__ == "__main__":
-    # Example usage of the TempSensor class
-    try:
-
-        while True:
-            sensor = TempSensor(spi_port=1, chip_select=0)
-            print("Starting temperature readings...")
-            temperature = sensor.read_temperature()
-            print(f"Current temperature: {temperature:.2f}°C")
-            sensor = TempSensor(spi_port=1, chip_select=1)
-            print("Starting temperature readings...")
-            temperature = sensor.read_temperature()
-            print(f"Current temperature: {temperature:.2f}°C")
-            time.sleep(1)  # Delay for 1 second
-    except KeyboardInterrupt:
-        print("\nExiting temperature sensor reader...")
-    except Exception as e:
-        print(f"An unexpected error occurred: {str(e)}")
-    finally:
-        if 'sensor' in locals():
-            sensor.close()

@@ -8,13 +8,16 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 WORKDIR /app
-COPY app/main.py ./main.py
+COPY app/ /app
 COPY pyproject.toml poetry.lock ./
 
 RUN apk update && apk add python3-dev \
         gcc \
-        libc-dev
+        libc-dev \
+        linux-headers \
+        curl
+
 
 RUN poetry install --without dev --no-root
 
-CMD [ "uvicorn", "main:app", "--reload"]
+CMD ["poetry", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8123", "--reload"]

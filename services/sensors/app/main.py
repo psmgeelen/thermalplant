@@ -5,7 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi_health import health
-from sensors import Tem
+from sensors import TempSensor
 import logging
 
 # Setup Logger
@@ -15,10 +15,6 @@ logging.basicConfig(
 logger = logging.getLogger("my-logger")
 stream_handler = logging.StreamHandler()
 logger.addHandler(stream_handler)
-
-# Init Handler
-# handler = trng.Handler()
-
 
 
 # Init API
@@ -43,7 +39,7 @@ def my_schema():
         "description": "A service that delivers free to use, truly random numbers",
         "contact": {
             "name": "A project of geelen.io",
-            "url": "https://github.com/psmgeelen/etaai",
+            "url": "https://github.com/psmgeelen/thermalplant",
         },
         "license": {"name": "UNLICENSE", "url": "https://unlicense.org/"},
     }
@@ -68,17 +64,20 @@ def ping():
 @app.get(
     "/temperature_upper",
     summary="Get the temperature of the upper Segment.",
-    descriptio= "",
+    description= "",
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
 @limiter.limit("5/minute")
-def get_temperature():
-    return temperature()
+def get_temperature_upper(request: Request,):
+    sensor = TempSensor(spi_port=1, chip_select=1)
+    temp = sensor.read_temperature()
+    sensor.close()
+    return temp
 
 
 @app.get(
-    "/thermal_sensor_lower",
+    "/temperature_lower",
     summary="Get a list of all the available devices",
     description=(
         "This request returns a list of devices. If no hardware is found, it will"
@@ -88,8 +87,11 @@ def get_temperature():
     response_model=str,
 )
 @limiter.limit("5/minute")
-def list_devices(request: Request):
-    return trng.Handler().list_devices()
+def get_temperature_lower(request: Request,):
+    sensor = TempSensor(spi_port=1, chip_select=0)
+    temp = sensor.read_temperature()
+    sensor.close()
+    return temp
 
 
 ##### Healthchecks #####
@@ -102,17 +104,14 @@ def _healthcheck_ping():
     else:
         return False
 
-
-def _healthcheck_get_random_nrs():
-    response = False
-    try:
-        get_random_nrs(dtype="int8", n_numbers=10)
-        response = True
-    except Exception as e:
-        logger.error("Healthcheck failed at getting nrs")
-    finally:
-        return response
-
+def _healthcheck_spi():
+    sensor = TempSensor(spi_port=1, chip_select=0)
+    temp = sensor.read_temperature()
+    sensor.close()
+    if type(temp) == float:
+        return str(temp)
+    else:
+        return False
 
 
 app.add_api_route(
@@ -120,9 +119,7 @@ app.add_api_route(
     health(
         [
             _healthcheck_ping,
-            _healthcheck_get_random_nrs,
-            _healthcheck_get_hex,
-            _healthcheck_list_devices,
+            _healthcheck_spi
         ]
     ),
     summary="Check the health of the service",

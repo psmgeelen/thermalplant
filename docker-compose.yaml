@@ -117,6 +117,7 @@ services:
       - fullstack
     networks:
       - opc-network
+      - dmz
     depends_on:
       database:
         condition: service_healthy
@@ -133,14 +134,41 @@ services:
     depends_on:
       database:
         condition: service_healthy
+  dmz-sensors:
+    image: nginx:1.27
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # Custom Nginx configuration
+    ports:
+      - "80:80"                               # Expose HTTP for DMZ
+    networks:
+      - dmz
+      - sensors-network
+    profiles:
+      - fullstack
+      - opc
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      sensors:
+        condition: service_healthy
+    restart: always
   sensors:
     build: ./services/sensors
+    privileged: true
     restart: always
     networks:
-    - opc-network
+      - sensors-network
     profiles:
-    - opc
-    - fullstack
+      - opc
+      - fullstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://0.0.0.0:8123/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     depends_on:
       database:
         condition: service_healthy
@@ -154,5 +182,10 @@ volumes:
   portainer:
     driver: local
 networks:
+  sensors-network:
+    driver: bridge
+  dmz:
+    driver: bridge
   opc-network:
     driver: bridge
+
