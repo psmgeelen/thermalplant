@@ -19,3 +19,8 @@ SELECT add_continuous_aggregate_policy('rolling_avg_sensor_data',
   start_offset => NULL,
   end_offset => INTERVAL '1 minute,',
   schedule_interval => INTERVAL '1 minute');
+
+SELECT add_continuous_aggregate_policy('rolling_avg_sensor_data',
+  start_offset => INTERVAL '10 minutes',
+  end_offset => INTERVAL '30 seconds',
+  schedule_interval => INTERVAL '30 seconds');

@@ -173,6 +173,17 @@ services:
     depends_on:
       database:
         condition: service_healthy
+  camera:
+    image: gen2brain/cam2ip:arm
+    ports:
+      - "56000:56000"
+    devices:
+      - "/dev/video0:/dev/video0"
+    networks:
+      - opc-network
+    profiles:
+      - fullstack
+      - opc
 volumes:
   grafana:
     driver: local

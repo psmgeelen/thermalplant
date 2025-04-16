@@ -5,7 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi_health import health
-from sensors import TempSensor
+from sensors import TempSensor, RPMSensor, AudioSensor
 import logging
 
 # Setup Logger
@@ -23,7 +23,19 @@ app = FastAPI()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-
+# Activate Sensors
+rpm_senor = RPMSensor(
+    gpio_pin=1,
+    measurement_window=1000, # measures over 1 second the rpm
+    measurement_interval=0.001 #1000 times /sec
+)
+audio_sensor = AudioSensor(
+    rate=40000,
+    channels=1,
+    sample_duration=5,
+    mfcc_count=50,
+    buffer_size=3
+)
 
 def my_schema():
     DOCS_TITLE = "ThermalPlant Sensors"
@@ -92,6 +104,20 @@ def get_temperature_lower(request: Request,):
     temp = sensor.read_temperature()
     sensor.close()
     return temp
+
+@app.get(
+    "/rpm",
+    summary="Get RPMs of Fan",
+    description=(
+        "This request returns a list of devices. If no hardware is found, it will"
+        "return the definition of the DeviceEmulator class"
+    ),
+    response_description="A dictionary with a list of devices",
+    response_model=str,
+)
+@limiter.limit("5/minute")
+def get_rpm(request: Request):
+    return rpm_senor.read_rpm()
 
 
 ##### Healthchecks #####

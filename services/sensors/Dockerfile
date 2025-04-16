@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM python:3.12-slim-bookworm
 
 RUN pip install poetry==1.8.3
 
@@ -11,12 +11,10 @@ WORKDIR /app
 COPY app/ /app
 COPY pyproject.toml poetry.lock ./
 
-RUN apk update && apk add python3-dev \
+RUN apt update && apt install \
         gcc \
-        libc-dev \
-        linux-headers \
-        curl
-
+        libportaudio2 \
+        portaudio19-dev -y
 
 RUN poetry install --without dev --no-root
 
