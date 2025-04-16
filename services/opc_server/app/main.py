@@ -1,56 +1,13 @@
-#import RPi.GPIO as GPIO
-import random
 import asyncio
 import sys
 import logging
+from asyncua import ua, Server
+from asyncua.server.history_sql import HistorySQLite
+from sensors import RandomSensor, ThermalSensor
 
 logging.basicConfig(level=logging.WARN, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 sys.path.insert(0, "..")
-
-from asyncua import ua, Server
-from asyncua.server.history_sql import HistorySQLite
-
-class RandomSensor(object):
-
-    def __init__(self):
-        self.name = "RandomSensor"
-        self.sources = [
-            {
-                "name": "random",
-                "datatype": ua.Variant(0.0, ua.VariantType.Double),
-                "historize": True,
-                "historize_length": 1000,
-                "func": self.read_value,
-                "writable": True
-
-            },
-        ]
-
-    @staticmethod
-    def read_value():
-        return random.random()
-
-class ThermalSensor(object):
-
-    def __init__(self,  prefix:str, gpio_pin: int):
-        self.name = "thermalSensor" + prefix
-        self.gpio_pin = gpio_pin
-        self.sources = [
-            {
-                "name": "random",
-                "datatype": ua.Variant(0.0, ua.VariantType.Double),
-                "historize": True,
-                "historize_length": 1000,
-                "func": self.read_value,
-                "writable": True
-            },
-        ]
-
-    #TODO write actual code for SPI read out of thermal sensors.
-    @staticmethod
-    def read_value():
-        return random.random()
 
 async def main():
     # setup our server
@@ -74,8 +31,8 @@ async def main():
 
     devices = []
     devices.append(RandomSensor())
-    devices.append(ThermalSensor(prefix="Upper", gpio_pin=10))
-    devices.append(ThermalSensor(prefix="Lower", gpio_pin=20))
+    devices.append(ThermalSensor(prefix="Upper", base_url="http://dmz-sensors/temperature_upper"))
+    devices.append(ThermalSensor(prefix="Lower", base_url="http://dmz-sensors/temperature_lower"))
 
     # populating our address space
     opcuaComponents = []

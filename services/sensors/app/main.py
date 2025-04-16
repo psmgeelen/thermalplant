@@ -68,7 +68,7 @@ def ping():
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def get_temperature_upper(request: Request,):
     sensor = TempSensor(spi_port=1, chip_select=1)
     temp = sensor.read_temperature()
@@ -86,7 +86,7 @@ def get_temperature_upper(request: Request,):
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def get_temperature_lower(request: Request,):
     sensor = TempSensor(spi_port=1, chip_select=0)
     temp = sensor.read_temperature()

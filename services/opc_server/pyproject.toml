@@ -8,8 +8,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-rpi-gpio = "^0.7.1"
 asyncua = "^1.1.5"
+requests = "^2.32.3"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.8.5"

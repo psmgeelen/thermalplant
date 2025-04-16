@@ -49,6 +49,7 @@ services:
       - fullstack
   prometheus:
     image: prom/prometheus:latest
+    restart: always
     container_name: prometheus
     volumes:
       - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml

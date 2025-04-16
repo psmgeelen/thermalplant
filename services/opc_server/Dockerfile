@@ -8,7 +8,7 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 WORKDIR /app
-COPY app/main.py ./main.py
+COPY app/ ./
 COPY pyproject.toml poetry.lock ./
 
 RUN apk update && apk add python3-dev \
