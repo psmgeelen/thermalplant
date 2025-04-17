@@ -9,8 +9,14 @@ import asyncio
 import numpy as np
 import pyaudio
 import librosa
+import os
+from gpiozero.pins.lgpio import LGPIOFactory
+
 
 logger = logging.getLogger("sensors")
+# Force gpiozero to use RPi.GPIO as the pin factory
+gpiozero.Device.pin_factory = LGPIOFactory()
+
 
 class TempSensor(object):
     """
@@ -77,10 +83,11 @@ class TempSensor(object):
 
 class RPMSensor(object):
 
-    def __init__(self, gpio_pin: int, measurement_interval_seconds: int, measurement_window: int):
+    def __init__(self, gpio_pin: int, measurement_interval: int, measurement_window: int, sample_size: int):
         self.gpiopin = gpio_pin
-        self.measurement_interval_seconds = measurement_interval_seconds
+        self.measurement_interval = measurement_interval
         self.measurement_window = measurement_window
+        self.sample_size = sample_size
         self.measurements = deque(maxlen=self.measurement_window)
         self.running = False  # Flag to control the measurement thread
         self._start_measurement_thread()
@@ -99,10 +106,9 @@ class RPMSensor(object):
         """
         prior_state = None
         prior_state_count = 0
+        pin = gpiozero.InputDevice(self.gpiopin)
         while True:
             try:
-                # Initialize GPIO pin as an input
-                pin = gpiozero.InputDevice(self.gpiopin)
 
                 # Read the state of the GPIO pin
                 state = pin.value  # Returns 1 if pin is HIGH, 0 if LOW
@@ -114,8 +120,8 @@ class RPMSensor(object):
                         "time_ns": time.time_ns(),
                         "time": time.time()
                     })
-                    if prior_state_count < 5:
-                        logger.warning(f"Only {prior_state_count} readings for measurement, please increase measurement_interval_seconds")
+                    if prior_state_count < self.sample_size:
+                        logger.warning(f"Only {prior_state_count} readings for measurement, please increase measurement_interval")
                     prior_state_count = 0
 
                 if prior_state is state:
@@ -126,7 +132,7 @@ class RPMSensor(object):
             except Exception as e:
                 logger.error(f"Error during measurement: {e}")
 
-            time.sleep(self.measurement_interval_seconds)
+            time.sleep(self.measurement_interval)
 
     def stop(self):
         """
@@ -151,7 +157,7 @@ class RPMSensor(object):
         # One revolution means 01-01-01-01 because we have 4 blades that we detect or not. One revolution there is 8 entries
         # So the time for 1 revolution is the first and last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
         # so if i have a list of 200 items, I have 25 revolutions. The time difference between first and last item therefore needs to be devided by 25 revolutions
-        revolution_time_ns = (timens[0] - timens[-1])/(len(self.measurements)/8)
+        revolution_time_ns = (timens[-1] - timens[0])/(len(self.measurements)/8)
         rpm = (60 * 1e9) / revolution_time_ns
         return rpm
 

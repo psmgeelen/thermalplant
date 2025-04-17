@@ -8,14 +8,19 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 WORKDIR /app
-COPY app/ /app
+
 COPY pyproject.toml poetry.lock ./
 
-RUN apt update && apt install \
+# Install system dependencies including those needed for GPIO
+RUN apt update && apt install -y \
         gcc \
         libportaudio2 \
-        portaudio19-dev -y
+        portaudio19-dev 
+   
 
 RUN poetry install --without dev --no-root
+
+# Copy application code after dependencies are installed
+COPY app/ /app
 
 CMD ["poetry", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8123", "--reload"]

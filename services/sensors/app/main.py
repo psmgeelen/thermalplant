@@ -25,9 +25,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Activate Sensors
 rpm_senor = RPMSensor(
-    gpio_pin=1,
-    measurement_window=1000, # measures over 1 second the rpm
-    measurement_interval=0.001 #1000 times /sec
+    gpio_pin=22,
+    measurement_window=100, # measures over 1 second the rpm
+    measurement_interval=0.001, #1000 times /sec
+    sample_size=8 # How many sample do we need to take in order to make sure that we are not skipping a cycle
 )
 audio_sensor = AudioSensor(
     rate=40000,
@@ -115,7 +116,7 @@ def get_temperature_lower(request: Request,):
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def get_rpm(request: Request):
     return rpm_senor.read_rpm()
 
@@ -144,8 +145,8 @@ app.add_api_route(
     "/health",
     health(
         [
-            _healthcheck_ping,
-            _healthcheck_spi
+            # _healthcheck_ping,
+            # _healthcheck_spi
         ]
     ),
     summary="Check the health of the service",

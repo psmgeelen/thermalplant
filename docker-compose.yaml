@@ -1,4 +1,18 @@
 ---
+x-sensors-base: &sensors-base
+  build: ./services/sensors
+  privileged: true
+  restart: always
+  volumes:
+    - "/dev:/dev"
+  networks:
+    - sensors-network
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://0.0.0.0:8123/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+
 services:
   portainer:
     image: portainer/portainer-ce:latest
@@ -156,23 +170,22 @@ services:
       sensors:
         condition: service_healthy
     restart: always
+    # Standard sensors service (without extra ports)
   sensors:
-    build: ./services/sensors
-    privileged: true
-    restart: always
-    networks:
-      - sensors-network
+    <<: *sensors-base
     profiles:
       - opc
       - fullstack
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://0.0.0.0:8123/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
     depends_on:
       database:
         condition: service_healthy
+  # Sensors service with additional debug ports
+  sensors-standalone:
+    <<: *sensors-base
+    profiles:
+      - sensors_only
+    ports:
+      - "8123:8123"  # Main API port
   camera:
     image: gen2brain/cam2ip:arm
     ports:
