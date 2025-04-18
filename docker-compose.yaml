@@ -138,7 +138,6 @@ services:
         condition: service_healthy
       sensors:
         condition: service_healthy
-
   opc_scraper:
     build: ./services/opc_scraper/
     restart: always
