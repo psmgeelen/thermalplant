@@ -15,7 +15,8 @@ COPY pyproject.toml poetry.lock ./
 RUN apt update && apt install -y \
         gcc \
         libportaudio2 \
-        portaudio19-dev 
+        portaudio19-dev \
+        curl
    
 
 RUN poetry install --without dev --no-root
