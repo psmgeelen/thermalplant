@@ -6,14 +6,16 @@ import logging
 from statistics import mean
 import threading
 import asyncio
+from typing import Optional, Dict, Any, List, Deque
 import numpy as np
 import pyaudio
 import librosa
 import os
+import time
 from gpiozero.pins.lgpio import LGPIOFactory
 
 
-logger = logging.getLogger("sensors")
+logger = logging.getLogger("sensors-backend")
 # Force gpiozero to use RPi.GPIO as the pin factory
 gpiozero.Device.pin_factory = LGPIOFactory()
 
@@ -160,108 +162,311 @@ class RPMSensor(object):
         revolution_time_ns = (timens[-1] - timens[0])/(len(self.measurements)/8)
         rpm = (60 * 1e9) / revolution_time_ns
         return rpm
+    
+class RecordingLoop:
+    def __init__(self, device_index: int, rate: int, channels: int, chunk_size: int = 1024):
+        self.device_index = device_index
+        self.rate = rate
+        self.channels = channels
+        self.chunk_size = chunk_size
+        self.running = False
+        self.thread = None
+        self.audio_buffer = deque(maxlen=10)
+        self.pyaudio_instance = None
+        self.stream = None
+        self.sample_ready = threading.Event()
 
-class AudioSensor(object):
-    """
-    A microphone audio sensor that records audio in 5-second increments and processes
-    it asynchronously to extract MFCC features.
-    """
+    def start(self, sample_duration: float = 5.0):
+        if self.running:
+            return
 
-    def __init__(self, rate=40000, channels=1, sample_duration=5, mfcc_count=13, buffer_size=10):
-        """
-        Initialize the audio sensor with specified parameters.
-        rate: Sampling rate for the microphone.
-        channels: Number of audio channels (1 for mono).
-        sample_duration: Duration of each recording in seconds.
-        mfcc_count: Number of MFCC components to extract.
-        buffer_size: The maximum number of recordings to store in the deque.
-        """
+        self.running = True
+        self.pyaudio_instance = pyaudio.PyAudio()
+        self.chunks_per_sample = int((self.rate * sample_duration) / self.chunk_size)
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            self.stream = self.pyaudio_instance.open(
+                format=pyaudio.paInt16,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                input_device_index=self.device_index,
+                frames_per_buffer=self.chunk_size
+            )
+
+            # Collect initial sample
+            self._collect_one_sample()
+
+            # Main recording loop
+            while self.running:
+                try:
+                    self._collect_one_sample()
+                    time.sleep(0.01)  # Prevent CPU overuse
+                except Exception as e:
+                    if self.stream:
+                        try:
+                            self.stream.stop_stream()
+                            self.stream.close()
+
+                            # Reopen stream
+                            self.stream = self.pyaudio_instance.open(
+                                format=pyaudio.paInt16,
+                                channels=self.channels,
+                                rate=self.rate,
+                                input=True,
+                                input_device_index=self.device_index,
+                                frames_per_buffer=self.chunk_size
+                            )
+                        except:
+                            # If reopening fails, break the loop to prevent orphaned processes
+                            self.running = False
+                            break
+        except:
+            self.running = False
+        finally:
+            self._cleanup()
+
+    def _collect_one_sample(self):
+        frames = []
+        for _ in range(self.chunks_per_sample):
+            if not self.running:
+                break
+            data = self.stream.read(self.chunk_size, exception_on_overflow=False)
+            frames.append(data)
+
+        if frames and self.running:
+            audio_data = b''.join(frames)
+            self.audio_buffer.append(audio_data)
+            self.sample_ready.set()
+            self.sample_ready.clear()
+
+    def _cleanup(self):
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+                self.stream.close()
+                self.stream = None
+            except:
+                pass
+
+    def stop(self):
+        if not self.running:
+            return
+
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2)
+            self.thread = None
+
+        self._cleanup()
+
+        if self.pyaudio_instance:
+            self.pyaudio_instance.terminate()
+            self.pyaudio_instance = None
+
+    def get_audio_data(self) -> Optional[bytes]:
+        if self.audio_buffer:
+            return self.audio_buffer.popleft()
+        return None
+
+    def has_data(self) -> bool:
+        return len(self.audio_buffer) > 0
+
+    def wait_for_data(self, timeout=None):
+        return self.sample_ready.wait(timeout=timeout)
+
+
+class ProcessingLoop:
+    def __init__(self, rate: int, mfcc_count: int = 50):
+        self.rate = rate
+        self.mfcc_count = mfcc_count
+        self.running = False
+        self.thread = None
+        self.mfcc_buffer = deque(maxlen=3)
+        self.data_ready = False
+        self.processing_event = threading.Event()
+
+    def start(self, audio_getter):
+        if self.running:
+            return
+
+        self.running = True
+        self.audio_getter = audio_getter
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while self.running:
+            try:
+                # Pull pattern: check if there is data to process
+                audio_data = self.audio_getter()
+
+                if audio_data:
+                    # Process the data
+                    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+
+                    # Process if non-empty
+                    if len(audio_np) > 0:
+                        # Normalize audio
+                        max_abs = np.max(np.abs(audio_np))
+                        if max_abs > 0:
+                            audio_np /= max_abs
+
+                        # Extract MFCC features
+                        mfcc = librosa.feature.mfcc(
+                            y=audio_np,
+                            sr=self.rate,
+                            n_mfcc=self.mfcc_count
+                        )
+
+                        # Store result
+                        self.mfcc_buffer.append(mfcc)
+                        self.data_ready = True
+                        self.processing_event.set()
+                else:
+                    # No data available - wait a bit
+                    time.sleep(0.5)
+            except Exception:
+                # If processing fails, make sure we don't create orphaned processes
+                if not self.running:
+                    break
+                time.sleep(0.5)
+
+    def stop(self):
+        if not self.running:
+            return
+
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2)
+            self.thread = None
+
+    def get_latest_mfcc(self) -> Optional[np.ndarray]:
+        if self.mfcc_buffer:
+            return self.mfcc_buffer[-1]
+        return None
+
+    def is_ready(self) -> bool:
+        return self.data_ready
+
+    def wait_for_processing(self, timeout=None):
+        return self.processing_event.wait(timeout=timeout)
+
+
+class AudioHandler:
+    def __init__(self, rate: int = 44100, channels: int = 1,
+                 sample_duration: float = 5.0, mfcc_count: int = 50, buffer_size: int = 3):
         self.rate = rate
         self.channels = channels
         self.sample_duration = sample_duration
         self.mfcc_count = mfcc_count
         self.buffer_size = buffer_size
-
-        self.audio_buffer = deque(maxlen=self.buffer_size)
-        self.mfcc_buffer = deque(maxlen=1)
-
-        self.running = False  # Flag to control the recording and processing threads
-
-        # Initialize PyAudio
-        self.p = pyaudio.PyAudio()
-
-    def start(self):
-        """
-        Start the audio recording and MFCC processing in separate threads.
-        """
+        self.data_ready_event = threading.Event()
         self.running = True
-        self.recording_thread = threading.Thread(target=self._record_audio, daemon=True)
-        self.recording_thread.start()
 
-        asyncio.run(self._process_mfcc())  # Start processing MFCC asynchronously
+        # Find audio device
+        matches = self._find_audio_device()
+        if len(matches) == 0:
+            raise RuntimeError("No audio device available")
+        print(matches)
+        self.device_index = matches[0]["index"]
+        # Initialize components
+        self._initialize_audio_components()
 
-    def stop(self):
-        """
-        Stop the audio recording and processing threads.
-        """
-        self.running = False
-        self.recording_thread.join()
+    def _find_audio_device(self, match_on: str = "USB Audio") -> list:
+
+        matches = []
+        p = pyaudio.PyAudio()
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if match_on in info["name"] and info["maxInputChannels"] == 1:
+                matches.append(info)
+        return matches
+
+    def _initialize_audio_components(self):
+        # Create and start recording loop
+        self.recording_loop = RecordingLoop(
+            device_index=self.device_index,
+            rate=self.rate,
+            channels=self.channels,
+            chunk_size=1024
+        )
+        self.recording_loop.start(sample_duration=self.sample_duration)
+
+        # Wait for first audio sample
+        if not self.recording_loop.wait_for_data(timeout=10):
+            self.recording_loop.stop()
+            raise RuntimeError("Could not record initial audio sample")
+
+        # Create and start processing loop
+        self.processing_loop = ProcessingLoop(
+            rate=self.rate,
+            mfcc_count=self.mfcc_count
+        )
+        self.processing_loop.start(self.recording_loop.get_audio_data)
+
+        # Initialize buffer for read_audio method
+        self.mfcc_buffer = deque(maxlen=self.buffer_size)
+
+        # Wait for initial processing
+        if not self.processing_loop.wait_for_processing(timeout=20):
+            self.recording_loop.stop()
+            self.processing_loop.stop()
+            raise RuntimeError("Could not process initial audio sample")
+
+        # Get initial processed data
+        initial_mfcc = self.processing_loop.get_latest_mfcc()
+        if initial_mfcc is not None:
+            self.mfcc_buffer.append(initial_mfcc)
+        else:
+            self.recording_loop.stop()
+            self.processing_loop.stop()
+            raise RuntimeError("Failed to get initial MFCC data")
+
+        # Start background thread to sync processed data
+        self.sync_thread = threading.Thread(target=self._sync_processed_data, daemon=True)
+        self.sync_thread.start()
+
+    def _sync_processed_data(self):
+        while self.running:
+            try:
+                if self.processing_loop.is_ready():
+                    latest_mfcc = self.processing_loop.get_latest_mfcc()
+                    if latest_mfcc is not None and (
+                            not self.mfcc_buffer or not np.array_equal(latest_mfcc, self.mfcc_buffer[-1])):
+                        self.mfcc_buffer.append(latest_mfcc)
+                        self.data_ready_event.set()
+                time.sleep(0.1)  # Prevent CPU overuse
+            except:
+                # If sync fails, stop everything to prevent orphaned processes
+                self.running = False
+                break
 
     def read_audio(self):
-        """
-        Retrieve the most recent MFCC features from the processing buffer.
+        if not self.mfcc_buffer:
+            # Wait briefly for data to become available
+            if not self.data_ready_event.wait(timeout=2.0):
+                raise RuntimeError("No data available after timeout")
 
-        Returns:
-            numpy.ndarray: The most recent MFCC features, or None if no data is available.
-        """
-        if len(self.mfcc_buffer) > 0:
-            return self.mfcc_buffer.popleft()  # Retrieve the newest MFCC
-        else:
-            return None  # No MFCCs are currently available
+        # Check that we have data
+        if not self.mfcc_buffer:
+            raise RuntimeError("No data available")
 
-    def _record_audio(self):
-        """
-        Continuously records audio in 5-second increments and appends the data to the buffer.
-        """
-        stream = self.p.open(format=pyaudio.paInt16,
-                             channels=self.channels,
-                             rate=self.rate,
-                             input=True,
-                             frames_per_buffer=self.rate * self.sample_duration)
-
-        while self.running:
-            audio_data = stream.read(self.rate * self.sample_duration)
-            self.audio_buffer.append(audio_data)  # Store the recording in the deque
-            time.sleep(self.sample_duration)  # Record every SAMPLE_DURATION seconds
-
-    async def _process_mfcc(self):
-        """
-        Asynchronously processes audio data from the deque and extracts MFCC features.
-        """
-        while self.running:
-            if len(self.audio_buffer) > 0:
-                audio_data = self.audio_buffer.popleft()  # Get the oldest audio recording
-
-                # Convert audio data to numpy array (from bytes)
-                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-
-                # Normalize audio data
-                audio_np /= np.max(np.abs(audio_np))  # Normalize to range [-1, 1]
-
-                # Extract MFCC features using librosa
-                mfcc = librosa.feature.mfcc(y=audio_np, sr=self.rate, n_mfcc=self.mfcc_count)
-
-                # Log the shape of the MFCC array
-                logger.info(f"MFCC components: {mfcc.shape}")
-                self.mfcc_buffer.append(mfcc)
-
-                # Add a small delay to simulate processing time
-                await asyncio.sleep(0.1)
-            else:
-                await asyncio.sleep(0.1)
+        return self.mfcc_buffer[-1]
 
     def close(self):
-        """Close the PyAudio stream."""
-        self.p.terminate()
-        logger.info("PyAudio connection closed.")
+        self.running = False
 
+        # Stop all components
+        if hasattr(self, 'processing_loop'):
+            self.processing_loop.stop()
+
+        if hasattr(self, 'recording_loop'):
+            self.recording_loop.stop()
+
+        # Wait for sync thread to finish
+        if hasattr(self, 'sync_thread') and self.sync_thread.is_alive():
+            self.sync_thread.join(timeout=1)

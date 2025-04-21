@@ -5,14 +5,15 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi_health import health
-from sensors import TempSensor, RPMSensor, AudioSensor
+from sensors import TempSensor, RPMSensor, AudioHandler
 import logging
+import json as json
 
 # Setup Logger
 logging.basicConfig(
-    format="%(levelname)s - %(asctime)s - %(name)s - %(message)s", level=logging.WARNING
+    format="%(levelname)s - %(asctime)s - %(name)s - %(message)s", level=logging.INFO
 )
-logger = logging.getLogger("my-logger")
+logger = logging.getLogger("API")
 stream_handler = logging.StreamHandler()
 logger.addHandler(stream_handler)
 
@@ -30,13 +31,14 @@ rpm_senor = RPMSensor(
     measurement_interval=0.001, #1000 times /sec
     sample_size=8 # How many sample do we need to take in order to make sure that we are not skipping a cycle
 )
-audio_sensor = AudioSensor(
-    rate=40000,
+audio_sensor = AudioHandler(
+    rate=44100,
     channels=1,
-    sample_duration=5,
+    sample_duration=1.0,
     mfcc_count=50,
     buffer_size=3
 )
+
 
 def my_schema():
     DOCS_TITLE = "ThermalPlant Sensors"
@@ -119,6 +121,22 @@ def get_temperature_lower(request: Request,):
 @limiter.limit("500/minute")
 def get_rpm(request: Request):
     return rpm_senor.read_rpm()
+
+
+@app.get(
+    "/mfcc",
+    summary="Get MFCC (Sound) from Engine",
+    description=(
+        "MFCC blabla"
+    ),
+    response_description="A dictionary with a list of devices",
+    response_model=str,
+)
+@limiter.limit("500/minute")
+def get_rpm(request: Request):
+    return json.dumps(audio_sensor.read_audio().tolist())
+
+
 
 
 ##### Healthchecks #####
