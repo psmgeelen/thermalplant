@@ -280,15 +280,38 @@ class RecordingLoop:
 
 
 class ProcessingLoop:
-    def __init__(self, rate: int, mfcc_count: int = 50):
+    def __init__(self, rate: int, mfcc_count: int = 50, n_fft: int = 2048):
         self.rate = rate
         self.mfcc_count = mfcc_count
+        self.n_fft = n_fft
+        
+        # Calculate frequency bins for spectrum
+        self.freq_bins = librosa.fft_frequencies(sr=rate, n_fft=n_fft)
+        
+        # For MFCC, approximate the center frequencies (rough approximation)
+        self.mfcc_freqs = librosa.mel_frequencies(n_mels=mfcc_count, fmin=0, fmax=rate/2)
+        
         self.running = False
         self.thread = None
         self.mfcc_buffer = deque(maxlen=3)
         self.spectrum_buffer = deque(maxlen=3)
         self.data_ready = False
         self.processing_event = threading.Event()
+        
+        # Setup frequencies only once
+        self.mfcc_labels = [f"mfcc_{i+1}_{int(round(freq))}Hz" for i, freq in enumerate(self.mfcc_freqs)]
+        
+        # Group spectrum frequencies into bands for easier interpretation
+        self.spectrum_bands = {}
+        band_size = 100  # Hz per band
+        for i, freq in enumerate(self.freq_bins):
+            if i >= 400:  # Limit to first 400 frequency bins for practicality
+                break
+            band = (int(round(freq)) // band_size) * band_size
+            band_label = f"spectrum_{band}Hz_{band+band_size}Hz"
+            if band_label not in self.spectrum_bands:
+                self.spectrum_bands[band_label] = []
+            self.spectrum_bands[band_label].append(i)
 
     def start(self, audio_getter):
         if self.running:
@@ -323,27 +346,41 @@ class ProcessingLoop:
                             n_mfcc=self.mfcc_count
                         )
 
-                        # Store result
+                        # Store result as labeled dictionary
                         mfcc_average = np.mean(mfcc, axis=1)
-                        self.mfcc_buffer.append(mfcc_average)
+                        mfcc_dict = {label: float(value) for label, value in zip(self.mfcc_labels, mfcc_average)}
+                        self.mfcc_buffer.append(mfcc_dict)
                         
                         # Calculate spectrum (FFT magnitudes)
-                        n_fft = 2048  # You can adjust this parameter
-                        D = np.abs(librosa.stft(audio_np, n_fft=n_fft))
+                        D = np.abs(librosa.stft(audio_np, n_fft=self.n_fft))
                         # Convert to power spectrum (squared magnitude)
                         spectrum = D**2
                         
-                        # Optionally, convert to decibels for better visualization
+                        # Convert to decibels for better visualization
                         spectrum_db = librosa.power_to_db(spectrum, ref=np.max)
-
-                        self.spectrum_buffer.append(spectrum_db)
+                        
+                        # Average across time frames
+                        spectrum_avg = np.mean(spectrum_db, axis=1)
+                        
+                        # Create labeled spectrum dictionary by bands
+                        spectrum_dict = {}
+                        for band_label, indices in self.spectrum_bands.items():
+                            if indices:  # Only process bands with indices
+                                # Average all frequencies in this band
+                                band_values = [spectrum_avg[i] for i in indices if i < len(spectrum_avg)]
+                                if band_values:
+                                    spectrum_dict[band_label] = float(np.mean(band_values))
+                        
+                        self.spectrum_buffer.append(spectrum_dict)
                         
                         self.data_ready = True
                         self.processing_event.set()
                 else:
                     # No data available - wait a bit
                     time.sleep(0.5)
-            except Exception:
+            except Exception as e:
+                # Log the exception for debugging
+                logger.error(f"Error in processing loop: {str(e)}")
                 # If processing fails, make sure we don't create orphaned processes
                 if not self.running:
                     break
@@ -358,9 +395,16 @@ class ProcessingLoop:
             self.thread.join(timeout=2)
             self.thread = None
 
-    def get_latest_mfcc(self) -> Optional[np.ndarray]:
+    def get_latest_mfcc(self) -> Optional[dict]:
+        """Return MFCC data as a dictionary with frequency labels"""
         if self.mfcc_buffer:
             return self.mfcc_buffer[-1]
+        return None
+
+    def get_latest_spectrum(self) -> Optional[dict]:
+        """Return spectrum data as a dictionary with frequency band labels"""
+        if self.spectrum_buffer:
+            return self.spectrum_buffer[-1]
         return None
 
     def is_ready(self) -> bool:
@@ -391,7 +435,6 @@ class AudioHandler:
         self._initialize_audio_components()
 
     def _find_audio_device(self, match_on: str = "USB Audio") -> list:
-
         matches = []
         p = pyaudio.PyAudio()
         for i in range(p.get_device_count()):
@@ -418,12 +461,14 @@ class AudioHandler:
         # Create and start processing loop
         self.processing_loop = ProcessingLoop(
             rate=self.rate,
-            mfcc_count=self.mfcc_count
+            mfcc_count=self.mfcc_count,
+            n_fft=2048
         )
         self.processing_loop.start(self.recording_loop.get_audio_data)
 
-        # Initialize buffer for read_audio method
+        # Initialize buffer for processed data
         self.mfcc_buffer = deque(maxlen=self.buffer_size)
+        self.spectrum_buffer = deque(maxlen=self.buffer_size)
 
         # Wait for initial processing
         if not self.processing_loop.wait_for_processing(timeout=20):
@@ -433,12 +478,21 @@ class AudioHandler:
 
         # Get initial processed data
         initial_mfcc = self.processing_loop.get_latest_mfcc()
+        initial_spectrum = self.processing_loop.get_latest_spectrum()
+        
         if initial_mfcc is not None:
             self.mfcc_buffer.append(initial_mfcc)
         else:
             self.recording_loop.stop()
             self.processing_loop.stop()
             raise RuntimeError("Failed to get initial MFCC data")
+            
+        if initial_spectrum is not None:
+            self.spectrum_buffer.append(initial_spectrum)
+        else:
+            self.recording_loop.stop()
+            self.processing_loop.stop()
+            raise RuntimeError("Failed to get initial spectrum data")
 
         # Start background thread to sync processed data
         self.sync_thread = threading.Thread(target=self._sync_processed_data, daemon=True)
@@ -448,13 +502,21 @@ class AudioHandler:
         while self.running:
             try:
                 if self.processing_loop.is_ready():
+                    # Sync MFCC data
                     latest_mfcc = self.processing_loop.get_latest_mfcc()
-                    if latest_mfcc is not None and (
-                            not self.mfcc_buffer or not np.array_equal(latest_mfcc, self.mfcc_buffer[-1])):
+                    if latest_mfcc is not None:
+                        # For dictionaries, we just replace them (no need for np.array_equal)
                         self.mfcc_buffer.append(latest_mfcc)
-                        self.data_ready_event.set()
+                    
+                    # Sync spectrum data
+                    latest_spectrum = self.processing_loop.get_latest_spectrum()
+                    if latest_spectrum is not None:
+                        self.spectrum_buffer.append(latest_spectrum)
+                        
+                    self.data_ready_event.set()
                 time.sleep(0.1)  # Prevent CPU overuse
-            except:
+            except Exception as e:
+                logger.error(f"Error in sync thread: {str(e)}")
                 # If sync fails, stop everything to prevent orphaned processes
                 self.running = False
                 break
@@ -463,26 +525,35 @@ class AudioHandler:
         if not self.mfcc_buffer:
             # Wait briefly for data to become available
             if not self.data_ready_event.wait(timeout=2.0):
-                raise RuntimeError("No data available after timeout")
+                raise RuntimeError("No MFCC data available after timeout")
 
         # Check that we have data
         if not self.mfcc_buffer:
-            raise RuntimeError("No data available")
+            raise RuntimeError("No MFCC data available")
 
         return self.mfcc_buffer[-1]
 
-    
     def read_spectrum(self):
         if not self.spectrum_buffer:
             # Wait briefly for data to become available
             if not self.data_ready_event.wait(timeout=2.0):
-                raise RuntimeError("No data available after timeout")
+                raise RuntimeError("No spectrum data available after timeout")
 
         # Check that we have data
         if not self.spectrum_buffer:
-            raise RuntimeError("No data available")
+            raise RuntimeError("No spectrum data available")
 
         return self.spectrum_buffer[-1]
+        
+    def read_all_audio(self):
+        """Return a combined dictionary with all audio data"""
+        mfcc_data = self.read_mfcc()
+        spectrum_data = self.read_spectrum()
+        
+        return {
+            "mfcc": mfcc_data,
+            "spectrum": spectrum_data
+        }
 
     def close(self):
         self.running = False

@@ -127,28 +127,75 @@ def get_rpm(request: Request):
     "/mfcc",
     summary="Get MFCC (Sound) from Engine",
     description=(
-        "MFCC blabla"
+        "Returns MFCC coefficients with frequency labels in a dictionary format"
     ),
-    response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_description="A dictionary of labeled MFCC coefficients",
 )
 @limiter.limit("500/minute")
 def get_mfcc(request: Request):
-    return json.dumps(audio_sensor.read_mfcc().tolist())
+    return audio_sensor.read_mfcc()
 
 
 @app.get(
     "/spectrum",
     summary="Get Spectrum (Sound) from Engine",
     description=(
-        "MFCC blabla"
+        "Returns frequency spectrum data with labeled frequency bands"
     ),
-    response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_description="A dictionary of labeled frequency bands",
 )
 @limiter.limit("500/minute")
-def get_mfcc(request: Request):
-    return json.dumps(audio_sensor.read_mfcc().tolist())
+def get_spectrum(request: Request):
+    return audio_sensor.read_spectrum()
+
+
+@app.get(
+    "/audio",
+    summary="Get all audio data",
+    description=(
+        "Returns both MFCC and spectrum data with frequency labels"
+    ),
+    response_description="A dictionary containing both MFCC and spectrum data",
+)
+@limiter.limit("500/minute")
+def get_audio(request: Request):
+    return audio_sensor.read_all_audio()
+
+
+@app.get(
+    "/sensors",
+    summary="Get all sensor data",
+    description=(
+        "Returns all sensor data including temperature, RPM, and audio features"
+    ),
+    response_description="A dictionary containing all sensor readings with appropriate labels",
+)
+@limiter.limit("200/minute")
+def get_all_sensors(request: Request):
+    # Get temperature readings
+    temp_sensor_upper = TempSensor(spi_port=1, chip_select=1)
+    temp_upper = temp_sensor_upper.read_temperature()
+    temp_sensor_upper.close()
+    
+    temp_sensor_lower = TempSensor(spi_port=1, chip_select=0)
+    temp_lower = temp_sensor_lower.read_temperature()
+    temp_sensor_lower.close()
+    
+    # Get RPM reading
+    rpm = rpm_senor.read_rpm()
+    
+    # Get audio features
+    audio_data = audio_sensor.read_all_audio()
+    
+    # Combine all data
+    all_sensors = {
+        "temperature_upper": temp_upper,
+        "temperature_lower": temp_lower,
+        "rpm": rpm,
+        "audio": audio_data
+    }
+    
+    return all_sensors
 
 
 
