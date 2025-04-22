@@ -3,18 +3,13 @@ from collections import deque
 import time
 import gpiozero
 import logging
-from statistics import mean
 import threading
-import asyncio
-from typing import Optional, Dict, Any, List, Deque
+from typing import Optional
 import numpy as np
 import pyaudio
 import librosa
-import os
-import time
 from gpiozero.pins.lgpio import LGPIOFactory
 from pydantic import BaseModel, Field, validator
-from typing import Dict, Any, Optional
 
 logger = logging.getLogger("sensors-backend")
 # Force gpiozero to use RPi.GPIO as the pin factory
@@ -40,12 +35,16 @@ class TempSensor(object):
         try:
             self.spi.open(spi_port, chip_select)
         except FileNotFoundError:
-            raise ValueError(f"SPI port {spi_port} is not available. Check your system configuration.")
+            raise ValueError(
+                f"SPI port {spi_port} is not available. Check your system configuration."
+            )
 
         self.spi.max_speed_hz = max_speed_hz
         self.spi.mode = mode
 
-        print(f"SPI initialized on port {spi_port}, chip select {chip_select}, speed {max_speed_hz}Hz, mode {mode}")
+        print(
+            f"SPI initialized on port {spi_port}, chip select {chip_select}, speed {max_speed_hz}Hz, mode {mode}"
+        )
 
     def read_temperature(self):
         """
@@ -71,7 +70,7 @@ class TempSensor(object):
 
         # Check for an error signal from the sensor (bit 2 set indicates an error)
         if combined_data & 0x4:
-            return float('NaN')
+            return float("NaN")
 
         # Extract the 12-bit temperature data (ignoring the 3 least significant bits)
         temp_data = combined_data >> 3
@@ -84,9 +83,16 @@ class TempSensor(object):
         self.spi.close()
         print("SPI connection closed.")
 
+
 class RPMSensor(object):
 
-    def __init__(self, gpio_pin: int, measurement_interval: int, measurement_window: int, sample_size: int):
+    def __init__(
+        self,
+        gpio_pin: int,
+        measurement_interval: int,
+        measurement_window: int,
+        sample_size: int,
+    ):
         self.gpiopin = gpio_pin
         self.measurement_interval = measurement_interval
         self.measurement_window = measurement_window
@@ -100,7 +106,9 @@ class RPMSensor(object):
         Start the measurement process in a separate thread.
         """
         self.running = True
-        self.measurement_thread = threading.Thread(target=self._do_measurement, daemon=True)
+        self.measurement_thread = threading.Thread(
+            target=self._do_measurement, daemon=True
+        )
         self.measurement_thread.start()
 
     def _do_measurement(self):
@@ -118,13 +126,13 @@ class RPMSensor(object):
 
                 # Append the measurement to the measurements deque
                 if prior_state is not None and prior_state != state:
-                    self.measurements.append({
-                        "state": state,
-                        "time_ns": time.time_ns(),
-                        "time": time.time()
-                    })
+                    self.measurements.append(
+                        {"state": state, "time_ns": time.time_ns(), "time": time.time()}
+                    )
                     if prior_state_count < self.sample_size:
-                        logger.warning(f"Only {prior_state_count} readings for measurement, please increase measurement_interval")
+                        logger.warning(
+                            f"Only {prior_state_count} readings for measurement, please increase measurement_interval"
+                        )
                     prior_state_count = 0
 
                 if prior_state is state:
@@ -160,12 +168,15 @@ class RPMSensor(object):
         # One revolution means 01-01-01-01 because we have 4 blades that we detect or not. One revolution there is 8 entries
         # So the time for 1 revolution is the first and last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
         # so if i have a list of 200 items, I have 25 revolutions. The time difference between first and last item therefore needs to be devided by 25 revolutions
-        revolution_time_ns = (timens[-1] - timens[0])/(len(self.measurements)/8)
+        revolution_time_ns = (timens[-1] - timens[0]) / (len(self.measurements) / 8)
         rpm = (60 * 1e9) / revolution_time_ns
         return rpm
-    
+
+
 class RecordingLoop:
-    def __init__(self, device_index: int, rate: int, channels: int, chunk_size: int = 1024):
+    def __init__(
+        self, device_index: int, rate: int, channels: int, chunk_size: int = 1024
+    ):
         self.device_index = device_index
         self.rate = rate
         self.channels = channels
@@ -195,7 +206,7 @@ class RecordingLoop:
                 rate=self.rate,
                 input=True,
                 input_device_index=self.device_index,
-                frames_per_buffer=self.chunk_size
+                frames_per_buffer=self.chunk_size,
             )
 
             # Collect initial sample
@@ -206,7 +217,7 @@ class RecordingLoop:
                 try:
                     self._collect_one_sample()
                     time.sleep(0.01)  # Prevent CPU overuse
-                except Exception as e:
+                except Exception:
                     if self.stream:
                         try:
                             self.stream.stop_stream()
@@ -219,7 +230,7 @@ class RecordingLoop:
                                 rate=self.rate,
                                 input=True,
                                 input_device_index=self.device_index,
-                                frames_per_buffer=self.chunk_size
+                                frames_per_buffer=self.chunk_size,
                             )
                         except:
                             # If reopening fails, break the loop to prevent orphaned processes
@@ -239,7 +250,7 @@ class RecordingLoop:
             frames.append(data)
 
         if frames and self.running:
-            audio_data = b''.join(frames)
+            audio_data = b"".join(frames)
             self.audio_buffer.append(audio_data)
             self.sample_ready.set()
             self.sample_ready.clear()
@@ -285,23 +296,27 @@ class ProcessingLoop:
         self.rate = rate
         self.mfcc_count = mfcc_count
         self.n_fft = n_fft
-        
+
         # Calculate frequency bins for spectrum
         self.freq_bins = librosa.fft_frequencies(sr=rate, n_fft=n_fft)
-        
+
         # For MFCC, approximate the center frequencies (rough approximation)
-        self.mfcc_freqs = librosa.mel_frequencies(n_mels=mfcc_count, fmin=0, fmax=rate/2)
-        
+        self.mfcc_freqs = librosa.mel_frequencies(
+            n_mels=mfcc_count, fmin=0, fmax=rate / 2
+        )
+
         self.running = False
         self.thread = None
         self.mfcc_buffer = deque(maxlen=3)
         self.spectrum_buffer = deque(maxlen=3)
         self.data_ready = False
         self.processing_event = threading.Event()
-        
+
         # Setup frequencies only once
-        self.mfcc_labels = [f"mfcc_{i+1}_{int(round(freq))}Hz" for i, freq in enumerate(self.mfcc_freqs)]
-        
+        self.mfcc_labels = [
+            f"mfcc_{i+1}_{int(round(freq))}Hz" for i, freq in enumerate(self.mfcc_freqs)
+        ]
+
         # Group spectrum frequencies into bands for easier interpretation
         self.spectrum_bands = {}
         band_size = 100  # Hz per band
@@ -331,7 +346,9 @@ class ProcessingLoop:
 
                 if audio_data:
                     # Process the data
-                    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
+                    audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(
+                        np.float32
+                    )
 
                     # Process if non-empty
                     if len(audio_np) > 0:
@@ -342,38 +359,45 @@ class ProcessingLoop:
 
                         # Extract MFCC features
                         mfcc = librosa.feature.mfcc(
-                            y=audio_np,
-                            sr=self.rate,
-                            n_mfcc=self.mfcc_count
+                            y=audio_np, sr=self.rate, n_mfcc=self.mfcc_count
                         )
 
                         # Store result as labeled dictionary
                         mfcc_average = np.mean(mfcc, axis=1)
-                        mfcc_dict = {label: float(value) for label, value in zip(self.mfcc_labels, mfcc_average)}
+                        mfcc_dict = {
+                            label: float(value)
+                            for label, value in zip(self.mfcc_labels, mfcc_average)
+                        }
                         self.mfcc_buffer.append(mfcc_dict)
-                        
+
                         # Calculate spectrum (FFT magnitudes)
                         D = np.abs(librosa.stft(audio_np, n_fft=self.n_fft))
                         # Convert to power spectrum (squared magnitude)
                         spectrum = D**2
-                        
+
                         # Convert to decibels for better visualization
                         spectrum_db = librosa.power_to_db(spectrum, ref=np.max)
-                        
+
                         # Average across time frames
                         spectrum_avg = np.mean(spectrum_db, axis=1)
-                        
+
                         # Create labeled spectrum dictionary by bands
                         spectrum_dict = {}
                         for band_label, indices in self.spectrum_bands.items():
                             if indices:  # Only process bands with indices
                                 # Average all frequencies in this band
-                                band_values = [spectrum_avg[i] for i in indices if i < len(spectrum_avg)]
+                                band_values = [
+                                    spectrum_avg[i]
+                                    for i in indices
+                                    if i < len(spectrum_avg)
+                                ]
                                 if band_values:
-                                    spectrum_dict[band_label] = float(np.mean(band_values))
-                        
+                                    spectrum_dict[band_label] = float(
+                                        np.mean(band_values)
+                                    )
+
                         self.spectrum_buffer.append(spectrum_dict)
-                        
+
                         self.data_ready = True
                         self.processing_event.set()
                 else:
@@ -416,8 +440,15 @@ class ProcessingLoop:
 
 
 class AudioHandler:
-    def __init__(self, rate: int = 44100, channels: int = 1,
-                 sample_duration: float = 5.0, mfcc_count: int = 50, spectrum_count:int =1000, buffer_size: int = 3):
+    def __init__(
+        self,
+        rate: int = 44100,
+        channels: int = 1,
+        sample_duration: float = 5.0,
+        mfcc_count: int = 50,
+        spectrum_count: int = 1000,
+        buffer_size: int = 3,
+    ):
         self.rate = rate
         self.channels = channels
         self.sample_duration = sample_duration
@@ -450,7 +481,7 @@ class AudioHandler:
             device_index=self.device_index,
             rate=self.rate,
             channels=self.channels,
-            chunk_size=1024
+            chunk_size=1024,
         )
         self.recording_loop.start(sample_duration=self.sample_duration)
 
@@ -461,9 +492,7 @@ class AudioHandler:
 
         # Create and start processing loop
         self.processing_loop = ProcessingLoop(
-            rate=self.rate,
-            mfcc_count=self.mfcc_count,
-            n_fft=2048
+            rate=self.rate, mfcc_count=self.mfcc_count, n_fft=2048
         )
         self.processing_loop.start(self.recording_loop.get_audio_data)
 
@@ -480,14 +509,14 @@ class AudioHandler:
         # Get initial processed data
         initial_mfcc = self.processing_loop.get_latest_mfcc()
         initial_spectrum = self.processing_loop.get_latest_spectrum()
-        
+
         if initial_mfcc is not None:
             self.mfcc_buffer.append(initial_mfcc)
         else:
             self.recording_loop.stop()
             self.processing_loop.stop()
             raise RuntimeError("Failed to get initial MFCC data")
-            
+
         if initial_spectrum is not None:
             self.spectrum_buffer.append(initial_spectrum)
         else:
@@ -496,7 +525,9 @@ class AudioHandler:
             raise RuntimeError("Failed to get initial spectrum data")
 
         # Start background thread to sync processed data
-        self.sync_thread = threading.Thread(target=self._sync_processed_data, daemon=True)
+        self.sync_thread = threading.Thread(
+            target=self._sync_processed_data, daemon=True
+        )
         self.sync_thread.start()
 
     def _sync_processed_data(self):
@@ -508,12 +539,12 @@ class AudioHandler:
                     if latest_mfcc is not None:
                         # For dictionaries, we just replace them (no need for np.array_equal)
                         self.mfcc_buffer.append(latest_mfcc)
-                    
+
                     # Sync spectrum data
                     latest_spectrum = self.processing_loop.get_latest_spectrum()
                     if latest_spectrum is not None:
                         self.spectrum_buffer.append(latest_spectrum)
-                        
+
                     self.data_ready_event.set()
                 time.sleep(0.1)  # Prevent CPU overuse
             except Exception as e:
@@ -545,51 +576,54 @@ class AudioHandler:
             raise RuntimeError("No spectrum data available")
 
         return self.spectrum_buffer[-1]
-        
+
     def read_all_audio(self):
         """Return a combined dictionary with all audio data"""
         mfcc_data = self.read_mfcc()
         spectrum_data = self.read_spectrum()
-        
-        return {
-            "mfcc": mfcc_data,
-            "spectrum": spectrum_data
-        }
+
+        return {"mfcc": mfcc_data, "spectrum": spectrum_data}
 
     def close(self):
         self.running = False
 
         # Stop all components
-        if hasattr(self, 'processing_loop'):
+        if hasattr(self, "processing_loop"):
             self.processing_loop.stop()
 
-        if hasattr(self, 'recording_loop'):
+        if hasattr(self, "recording_loop"):
             self.recording_loop.stop()
 
         # Wait for sync thread to finish
-        if hasattr(self, 'sync_thread') and self.sync_thread.is_alive():
+        if hasattr(self, "sync_thread") and self.sync_thread.is_alive():
             self.sync_thread.join(timeout=1)
 
 
 # Define Pydantic models for request/response validation
 class RPMSensorSettings(BaseModel):
-    measurement_window: int = Field(..., description="Window size for measurements (in samples)")
-    measurement_interval: float = Field(..., description="Interval between measurements (in seconds)")
-    sample_size: int = Field(..., description="Number of samples needed to ensure not skipping a cycle")
+    measurement_window: int = Field(
+        ..., description="Window size for measurements (in samples)"
+    )
+    measurement_interval: float = Field(
+        ..., description="Interval between measurements (in seconds)"
+    )
+    sample_size: int = Field(
+        ..., description="Number of samples needed to ensure not skipping a cycle"
+    )
 
-    @validator('measurement_window')
+    @validator("measurement_window")
     def validate_window(cls, v):
         if v <= 0:
             raise ValueError("measurement_window must be positive")
         return v
 
-    @validator('measurement_interval')
+    @validator("measurement_interval")
     def validate_interval(cls, v):
         if v <= 0:
             raise ValueError("measurement_interval must be positive")
         return v
 
-    @validator('sample_size')
+    @validator("sample_size")
     def validate_sample_size(cls, v):
         if v <= 0:
             raise ValueError("sample_size must be positive")
@@ -597,17 +631,21 @@ class RPMSensorSettings(BaseModel):
 
 
 class AudioHandlerSettings(BaseModel):
-    sample_duration: float = Field(..., description="Duration of audio samples in seconds")
+    sample_duration: float = Field(
+        ..., description="Duration of audio samples in seconds"
+    )
     mfcc_count: int = Field(..., description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(..., description="Size of the buffer for storing processed data")
+    buffer_size: int = Field(
+        ..., description="Size of the buffer for storing processed data"
+    )
 
-    @validator('sample_duration')
+    @validator("sample_duration")
     def validate_duration(cls, v):
         if v <= 0:
             raise ValueError("sample_duration must be positive")
         return v
 
-    @validator('mfcc_count')
+    @validator("mfcc_count")
     def validate_mfcc_count(cls, v):
         if v <= 0:
             raise ValueError("mfcc_count must be positive")
@@ -615,7 +653,7 @@ class AudioHandlerSettings(BaseModel):
             raise ValueError("mfcc_count should be <= 128")
         return v
 
-    @validator('buffer_size')
+    @validator("buffer_size")
     def validate_buffer_size(cls, v):
         if v <= 0:
             raise ValueError("buffer_size must be positive")
