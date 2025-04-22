@@ -498,6 +498,7 @@ class AudioHandler:
             logging.info(f"Found audio devices: {info}")
             if match_on in info["name"] and info["maxInputChannels"] == 1:
                 matches.append(info)
+                logging.info(f"Found a match!: {info}")
         return matches
 
     def _initialize_audio_components(self):
