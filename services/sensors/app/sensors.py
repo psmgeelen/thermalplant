@@ -42,8 +42,10 @@ class TempSensor(object):
         self.spi.max_speed_hz = max_speed_hz
         self.spi.mode = mode
 
-        print(
-            f"SPI initialized on port {spi_port}, chip select {chip_select}, speed {max_speed_hz}Hz, mode {mode}"
+        logger.info(
+            f"SPI initialized on port {spi_port}, "
+            f"chip select {chip_select}, speed {max_speed_hz}Hz, "
+            f"mode {mode}"
         )
 
     def read_temperature(self):
@@ -58,7 +60,7 @@ class TempSensor(object):
 
             return self._convert_to_temperature(raw_data)
         except Exception as e:
-            print(f"Temperature reading error: {str(e)}")
+            logger.error(f"Temperature reading error: {str(e)}")
             raise
 
     def _convert_to_temperature(self, raw_data):
@@ -81,7 +83,7 @@ class TempSensor(object):
     def close(self):
         """Close the SPI connection."""
         self.spi.close()
-        print("SPI connection closed.")
+        logger.info("SPI connection closed.")
 
 
 class RPMSensor(object):
@@ -118,12 +120,11 @@ class RPMSensor(object):
         prior_state = None
         prior_state_count = 0
         pin = gpiozero.InputDevice(self.gpiopin)
-        while True:
+        while self.running:  # Check self.running to allow clean shutdown
             try:
-
                 # Read the state of the GPIO pin
                 state = pin.value  # Returns 1 if pin is HIGH, 0 if LOW
-
+    
                 # Append the measurement to the measurements deque
                 if prior_state is not None and prior_state != state:
                     self.measurements.append(
@@ -131,15 +132,20 @@ class RPMSensor(object):
                     )
                     if prior_state_count < self.sample_size:
                         logger.warning(
-                            f"Only {prior_state_count} readings for measurement, please increase measurement_interval"
+                            f"Only {prior_state_count} readings "
+                            f"for measurement, please increase measurement_interval"
                         )
                     prior_state_count = 0
-
+    
                 if prior_state is state:
                     prior_state_count += 1
-
+    
                 prior_state = state
-
+    
+            except gpiozero.GPIOZeroError as gpe:
+                logger.error(f"GPIO error during measurement: {gpe}")
+            except ValueError as ve:
+                logger.error(f"Value error during measurement: {ve}")
             except Exception as e:
                 logger.error(f"Error during measurement: {e}")
 
@@ -165,9 +171,12 @@ class RPMSensor(object):
 
         timens = [m["time_ns"] for m in self.measurements]
 
-        # One revolution means 01-01-01-01 because we have 4 blades that we detect or not. One revolution there is 8 entries
-        # So the time for 1 revolution is the first and last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
-        # so if i have a list of 200 items, I have 25 revolutions. The time difference between first and last item therefore needs to be devided by 25 revolutions
+        # One revolution means 01-01-01-01 because we have 4 blades that we detect or not.
+        # One revolution there is 8 entries. So the time for 1 revolution is the first and
+        # last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
+        # so if i have a list of 200 items, I have 25 revolutions.
+        # The time difference between first and last item therefore needs to be devided
+        # 25 revolutions
         revolution_time_ns = (timens[-1] - timens[0]) / (len(self.measurements) / 8)
         rpm = (60 * 1e9) / revolution_time_ns
         return rpm
@@ -217,12 +226,13 @@ class RecordingLoop:
                 try:
                     self._collect_one_sample()
                     time.sleep(0.01)  # Prevent CPU overuse
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Error during audio collection: {str(e)}")
                     if self.stream:
                         try:
                             self.stream.stop_stream()
                             self.stream.close()
-
+    
                             # Reopen stream
                             self.stream = self.pyaudio_instance.open(
                                 format=pyaudio.paInt16,
@@ -232,11 +242,13 @@ class RecordingLoop:
                                 input_device_index=self.device_index,
                                 frames_per_buffer=self.chunk_size,
                             )
-                        except:
+                        except Exception as reopen_error:
                             # If reopening fails, break the loop to prevent orphaned processes
+                            logger.error(f"Failed to reopen audio stream: {str(reopen_error)}")
                             self.running = False
                             break
-        except:
+        except Exception as outer_error:
+            logger.error(f"Critical error in recording loop: {str(outer_error)}")
             self.running = False
         finally:
             self._cleanup()
@@ -261,8 +273,8 @@ class RecordingLoop:
                 self.stream.stop_stream()
                 self.stream.close()
                 self.stream = None
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error while cleaning up audio stream: {str(e)}")
 
     def stop(self):
         if not self.running:
@@ -403,9 +415,21 @@ class ProcessingLoop:
                 else:
                     # No data available - wait a bit
                     time.sleep(0.5)
+            except ValueError as ve:
+                # Log specific value errors (common with audio processing)
+                logger.error(f"Value error in audio processing: {str(ve)}")
+                time.sleep(0.5)
+            except np.linalg.LinAlgError as lae:
+                # Linear algebra errors can occur during audio processing
+                logger.error(f"Linear algebra error in audio processing: {str(lae)}")
+                time.sleep(0.5)
+            except TypeError as te:
+                # Type errors might occur with unexpected audio data
+                logger.error(f"Type error in audio processing: {str(te)}")
+                time.sleep(0.5)
             except Exception as e:
                 # Log the exception for debugging
-                logger.error(f"Error in processing loop: {str(e)}")
+                logger.error(f"Unexpected error in processing loop: {str(e)}")
                 # If processing fails, make sure we don't create orphaned processes
                 if not self.running:
                     break
@@ -461,7 +485,6 @@ class AudioHandler:
         matches = self._find_audio_device()
         if len(matches) == 0:
             raise RuntimeError("No audio device available")
-        print(matches)
         self.device_index = matches[0]["index"]
         # Initialize components
         self._initialize_audio_components()
@@ -485,26 +508,43 @@ class AudioHandler:
         )
         self.recording_loop.start(sample_duration=self.sample_duration)
 
-        # Wait for first audio sample
-        if not self.recording_loop.wait_for_data(timeout=10):
-            self.recording_loop.stop()
-            raise RuntimeError("Could not record initial audio sample")
-
-        # Create and start processing loop
-        self.processing_loop = ProcessingLoop(
-            rate=self.rate, mfcc_count=self.mfcc_count, n_fft=2048
-        )
-        self.processing_loop.start(self.recording_loop.get_audio_data)
-
-        # Initialize buffer for processed data
-        self.mfcc_buffer = deque(maxlen=self.buffer_size)
-        self.spectrum_buffer = deque(maxlen=self.buffer_size)
-
-        # Wait for initial processing
-        if not self.processing_loop.wait_for_processing(timeout=20):
-            self.recording_loop.stop()
-            self.processing_loop.stop()
-            raise RuntimeError("Could not process initial audio sample")
+        try:
+            # Wait for first audio sample
+            if not self.recording_loop.wait_for_data(timeout=10):
+                self.recording_loop.stop()
+                raise RuntimeError("Could not record initial audio sample")
+        
+            # Create and start processing loop
+            self.processing_loop = ProcessingLoop(
+                rate=self.rate, mfcc_count=self.mfcc_count, n_fft=2048
+            )
+            self.processing_loop.start(self.recording_loop.get_audio_data)
+        
+            # Initialize buffer for processed data
+            self.mfcc_buffer = deque(maxlen=self.buffer_size)
+            self.spectrum_buffer = deque(maxlen=self.buffer_size)
+        
+            # Wait for initial processing
+            if not self.processing_loop.wait_for_processing(timeout=20):
+                self.recording_loop.stop()
+                self.processing_loop.stop()
+                raise RuntimeError("Could not process initial audio sample")
+        except Exception as e:
+            # Clean up any initialized components before re-raising
+            if hasattr(self, 'recording_loop'):
+                try:
+                    self.recording_loop.stop()
+                except Exception as cleanup_error:
+                    logger.error(f"Error stopping recording loop during "
+                                 f"initialization failure: {cleanup_error}")
+            if hasattr(self, 'processing_loop'):
+                try:
+                    self.processing_loop.stop()
+                except Exception as cleanup_error:
+                    logger.error(f"Error stopping processing loop during "
+                                 f"initialization failure: {cleanup_error}")
+            # Re-raise the original exception
+            raise RuntimeError(f"Audio component initialization failed: {str(e)}") from e
 
         # Get initial processed data
         initial_mfcc = self.processing_loop.get_latest_mfcc()
@@ -547,8 +587,16 @@ class AudioHandler:
 
                     self.data_ready_event.set()
                 time.sleep(0.1)  # Prevent CPU overuse
+            except AttributeError as ae:
+                logger.error(f"Attribute error in sync thread (likely during shutdown): {str(ae)}")
+                self.running = False
+                break
+            except RuntimeError as re:
+                logger.error(f"Runtime error in sync thread: {str(re)}")
+                self.running = False
+                break
             except Exception as e:
-                logger.error(f"Error in sync thread: {str(e)}")
+                logger.error(f"Unexpected error in sync thread: {str(e)}")
                 # If sync fails, stop everything to prevent orphaned processes
                 self.running = False
                 break
@@ -589,14 +637,23 @@ class AudioHandler:
 
         # Stop all components
         if hasattr(self, "processing_loop"):
-            self.processing_loop.stop()
-
+            try:
+                self.processing_loop.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping processing loop: {str(e)}")
+    
         if hasattr(self, "recording_loop"):
-            self.recording_loop.stop()
-
+            try:
+                self.recording_loop.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping recording loop: {str(e)}")
+    
         # Wait for sync thread to finish
         if hasattr(self, "sync_thread") and self.sync_thread.is_alive():
-            self.sync_thread.join(timeout=1)
+            try:
+                self.sync_thread.join(timeout=1)
+            except Exception as e:
+                logger.warning(f"Error joining sync thread: {str(e)}")
 
 
 # Define Pydantic models for request/response validation

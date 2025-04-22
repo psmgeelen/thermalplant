@@ -40,7 +40,7 @@ AUDIO_CHANNELS = 1
 rpm_settings = {
     "measurement_window": 100,  # measures over 1 second the rpm
     "measurement_interval": 0.001,  # 1000 times /sec
-    "sample_size": 8  # How many sample do we need to take in order to make sure that we are not skipping a cycle
+    "sample_size": 8 
 }
 
 audio_settings = {"sample_duration": 1.0, "mfcc_count": 50, "buffer_size": 3}
@@ -54,8 +54,8 @@ def initialize_rpm_sensor():
         if "rpm_sensor" in globals():
             try:
                 rpm_sensor.stop()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error stopping existing RPM sensor: {e}")
 
         rpm_sensor = RPMSensor(
             gpio_pin=GPIO_PIN,
@@ -77,8 +77,8 @@ def initialize_audio_handler():
         if "audio_sensor" in globals():
             try:
                 audio_sensor.close()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error closing existing audio handler: {e}")
 
         audio_sensor = AudioHandler(
             rate=AUDIO_RATE,
@@ -223,7 +223,8 @@ def update_rpm_settings(request: Request, settings: RPMSensorSettings):
 
 @app.get(
     "/mfcc",
-    summary="Extract Mel-Frequency Cepstral Coefficients (MFCC) acoustic features from engine sound",
+    summary="Extract Mel-Frequency Cepstral Coefficients (MFCC) "
+            "acoustic features from engine sound",
     description=(
         "Returns MFCC coefficients with frequency labels in a dictionary format"
     ),
@@ -497,7 +498,6 @@ def _healthcheck_system_resources():
         False: If resources are critically low
     """
     try:
-
         # CPU usage
         cpu_percent = psutil.cpu_percent(interval=0.5)
 
@@ -520,13 +520,14 @@ def _healthcheck_system_resources():
             }
         else:
             logger.warning(
-                f"System resources critical: CPU={cpu_percent}%, Memory={memory_percent}%, Disk={disk_percent}%"
+                f"System resources critical: "
+                f"CPU={cpu_percent}%, Memory={memory_percent}%, Disk={disk_percent}%"
             )
             return False
-    except ImportError:
-        # psutil not installed, return minimal info
-        logger.warning("psutil not installed, system resource check limited")
-        return {"status": "UNKNOWN", "message": "psutil not installed"}
+    except PermissionError as pe:
+        # Handle permission errors when accessing system information
+        logger.error(f"Permission error when checking system resources: {str(pe)}")
+        return {"status": "ERROR", "message": "Permission denied when checking system resources"}
     except Exception as e:
         logger.error(f"System resource check failed: {str(e)}")
         return False
@@ -630,7 +631,8 @@ app.add_api_route(
     health([_healthcheck_audio_sensor]),
     summary="Check audio processing system status",
     description="Verifies that the audio capture and processing system is operational.",
-    response_description="Returns HTTP 200 if audio sensors and processing are functioning correctly.",
+    response_description="Returns HTTP 200 if audio sensors and processing "
+                         "are functioning correctly.",
 )
 
 app.add_api_route(
