@@ -133,9 +133,22 @@ def get_rpm(request: Request):
     response_model=str,
 )
 @limiter.limit("500/minute")
-def get_rpm(request: Request):
-    return json.dumps(audio_sensor.read_audio().tolist())
+def get_mfcc(request: Request):
+    return json.dumps(audio_sensor.read_mfcc().tolist())
 
+
+@app.get(
+    "/spectrum",
+    summary="Get Spectrum (Sound) from Engine",
+    description=(
+        "MFCC blabla"
+    ),
+    response_description="A dictionary with a list of devices",
+    response_model=str,
+)
+@limiter.limit("500/minute")
+def get_mfcc(request: Request):
+    return json.dumps(audio_sensor.read_mfcc().tolist())
 
 
 

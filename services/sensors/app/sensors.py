@@ -286,6 +286,7 @@ class ProcessingLoop:
         self.running = False
         self.thread = None
         self.mfcc_buffer = deque(maxlen=3)
+        self.spectrum_buffer = deque(maxlen=3)
         self.data_ready = False
         self.processing_event = threading.Event()
 
@@ -323,7 +324,20 @@ class ProcessingLoop:
                         )
 
                         # Store result
-                        self.mfcc_buffer.append(mfcc)
+                        mfcc_average = np.mean(mfcc, axis=1)
+                        self.mfcc_buffer.append(mfcc_average)
+                        
+                        # Calculate spectrum (FFT magnitudes)
+                        n_fft = 2048  # You can adjust this parameter
+                        D = np.abs(librosa.stft(audio_np, n_fft=n_fft))
+                        # Convert to power spectrum (squared magnitude)
+                        spectrum = D**2
+                        
+                        # Optionally, convert to decibels for better visualization
+                        spectrum_db = librosa.power_to_db(spectrum, ref=np.max)
+
+                        self.spectrum_buffer.append(spectrum_db)
+                        
                         self.data_ready = True
                         self.processing_event.set()
                 else:
@@ -358,7 +372,7 @@ class ProcessingLoop:
 
 class AudioHandler:
     def __init__(self, rate: int = 44100, channels: int = 1,
-                 sample_duration: float = 5.0, mfcc_count: int = 50, buffer_size: int = 3):
+                 sample_duration: float = 5.0, mfcc_count: int = 50, spectrum_count:int =1000, buffer_size: int = 3):
         self.rate = rate
         self.channels = channels
         self.sample_duration = sample_duration
@@ -445,7 +459,7 @@ class AudioHandler:
                 self.running = False
                 break
 
-    def read_audio(self):
+    def read_mfcc(self):
         if not self.mfcc_buffer:
             # Wait briefly for data to become available
             if not self.data_ready_event.wait(timeout=2.0):
@@ -456,6 +470,19 @@ class AudioHandler:
             raise RuntimeError("No data available")
 
         return self.mfcc_buffer[-1]
+
+    
+    def read_spectrum(self):
+        if not self.spectrum_buffer:
+            # Wait briefly for data to become available
+            if not self.data_ready_event.wait(timeout=2.0):
+                raise RuntimeError("No data available after timeout")
+
+        # Check that we have data
+        if not self.spectrum_buffer:
+            raise RuntimeError("No data available")
+
+        return self.spectrum_buffer[-1]
 
     def close(self):
         self.running = False
