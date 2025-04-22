@@ -492,8 +492,10 @@ class AudioHandler:
     def _find_audio_device(self, match_on: str = "USB Audio") -> list:
         matches = []
         p = pyaudio.PyAudio()
+
         for i in range(p.get_device_count()):
             info = p.get_device_info_by_index(i)
+            logging.info(f"Found audio devices: {info}")
             if match_on in info["name"] and info["maxInputChannels"] == 1:
                 matches.append(info)
         return matches
