@@ -13,7 +13,8 @@ import librosa
 import os
 import time
 from gpiozero.pins.lgpio import LGPIOFactory
-
+from pydantic import BaseModel, Field, validator
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("sensors-backend")
 # Force gpiozero to use RPi.GPIO as the pin factory
@@ -568,3 +569,54 @@ class AudioHandler:
         # Wait for sync thread to finish
         if hasattr(self, 'sync_thread') and self.sync_thread.is_alive():
             self.sync_thread.join(timeout=1)
+
+
+# Define Pydantic models for request/response validation
+class RPMSensorSettings(BaseModel):
+    measurement_window: int = Field(..., description="Window size for measurements (in samples)")
+    measurement_interval: float = Field(..., description="Interval between measurements (in seconds)")
+    sample_size: int = Field(..., description="Number of samples needed to ensure not skipping a cycle")
+
+    @validator('measurement_window')
+    def validate_window(cls, v):
+        if v <= 0:
+            raise ValueError("measurement_window must be positive")
+        return v
+
+    @validator('measurement_interval')
+    def validate_interval(cls, v):
+        if v <= 0:
+            raise ValueError("measurement_interval must be positive")
+        return v
+
+    @validator('sample_size')
+    def validate_sample_size(cls, v):
+        if v <= 0:
+            raise ValueError("sample_size must be positive")
+        return v
+
+
+class AudioHandlerSettings(BaseModel):
+    sample_duration: float = Field(..., description="Duration of audio samples in seconds")
+    mfcc_count: int = Field(..., description="Number of MFCC coefficients to extract")
+    buffer_size: int = Field(..., description="Size of the buffer for storing processed data")
+
+    @validator('sample_duration')
+    def validate_duration(cls, v):
+        if v <= 0:
+            raise ValueError("sample_duration must be positive")
+        return v
+
+    @validator('mfcc_count')
+    def validate_mfcc_count(cls, v):
+        if v <= 0:
+            raise ValueError("mfcc_count must be positive")
+        if v > 128:
+            raise ValueError("mfcc_count should be <= 128")
+        return v
+
+    @validator('buffer_size')
+    def validate_buffer_size(cls, v):
+        if v <= 0:
+            raise ValueError("buffer_size must be positive")
+        return v
