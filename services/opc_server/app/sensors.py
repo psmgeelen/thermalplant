@@ -1,5 +1,7 @@
 import requests
 import random
+import time
+import logging
 from asyncua import ua
 
 class RandomSensor(object):
@@ -125,4 +127,219 @@ class RPMSensor(object):
 
         except ValueError:
             raise ValueError("The response from the server is invalid and could not be converted to a float.")
+
+class AudioSensorMfcc(object):
+
+    def __init__(self, base_url: str):
+        self.name = "AudioSensor MFCC"
+        self.base_url = base_url
+        self.cache = None
+        self.last_update = 0
+        self.update_interval = 1.0  # Update interval in seconds
+        self.key_functions = {}  # Maps keys to their corresponding functions
+        self.sources = []  # Initialize empty sources
+
+        # Get initial data and set up sources
+        self.update_cache()
+        self.initialize_sources()
+
+    def initialize_sources(self):
+        """
+        Initialize or update the sources based on the current cache
+        """
+        if not self.cache:
+            return
+
+        # Create new sources list
+        new_sources = []
         
+        # Set of keys we've already processed
+        existing_keys = set(self.key_functions.keys())
+        current_keys = set(self.cache.keys())
+        
+        # Add new keys
+        for key in current_keys:
+            if key not in existing_keys:
+                # Create a closure to capture the specific key for each source
+                def get_value_for_key(key=key):
+                    return self.read_value(key)
+                
+                # Store the function so we can reuse it
+                self.key_functions[key] = get_value_for_key
+                
+            # Add the source definition
+            new_sources.append({
+                "name": key,
+                "datatype": ua.Variant(0.0, ua.VariantType.Double),
+                "historize": True,
+                "historize_length": 1000,
+                "func": self.key_functions[key],
+                "writable": True
+            })
+            
+        # Remove functions for keys that no longer exist
+        for key in existing_keys - current_keys:
+            del self.key_functions[key]
+            
+        # Only update if this isn't the initial setup
+        if self.sources:
+            logging.info(f"MFCC sources updated, added: {current_keys - existing_keys}, removed: {existing_keys - current_keys}")
+            
+        self.sources = new_sources
+
+    def update_cache(self):
+        """
+        Updates the cached data from the API endpoint
+        """
+        try:
+            # Sending the GET request to the specified endpoint
+            response = requests.get(self.base_url, timeout=10)
+            response.raise_for_status()
+            
+            # Store the old keys to detect changes
+            old_keys = set(self.cache.keys()) if self.cache else set()
+            
+            # Update the cache
+            self.cache = response.json()
+            self.last_update = time.time()
+            
+            # Check if the set of keys has changed
+            new_keys = set(self.cache.keys())
+            if old_keys != new_keys:
+                self.initialize_sources()
+            
+        except Exception as e:
+            # If update fails, keep the old cache but log the error
+            if self.cache is None:  # Only raise if we don't have any data yet
+                raise
+            logging.error(f"Failed to update MFCC data: {str(e)}")
+
+    def read_value(self, key):
+        """
+        Returns a specific value from the cached audio data.
+        
+        Args:
+            key (str): The specific frequency key to retrieve
+            
+        Returns:
+            float: The value for the specified key
+        """
+        # Check if we need to update the cache
+        if time.time() - self.last_update > self.update_interval:
+            self.update_cache()
+            
+        # Return the specific value for the requested key
+        if self.cache and key in self.cache:
+            return float(self.cache[key])
+        
+        # If key is not found, return 0.0 and log error
+        logging.error(f"Key {key} not found in MFCC data")
+        return 0.0
+
+class AudioSensorSpectral(object):
+
+    def __init__(self, base_url: str):
+        self.name = "AudioSensor Spectral"
+        self.base_url = base_url
+        self.cache = None
+        self.last_update = 0
+        self.update_interval = 1.0  # Update interval in seconds
+        self.key_functions = {}  # Maps keys to their corresponding functions
+        self.sources = []  # Initialize empty sources
+
+        # Get initial data and set up sources
+        self.update_cache()
+        self.initialize_sources()
+
+    def initialize_sources(self):
+        """
+        Initialize or update the sources based on the current cache
+        """
+        if not self.cache:
+            return
+
+        # Create new sources list
+        new_sources = []
+        
+        # Set of keys we've already processed
+        existing_keys = set(self.key_functions.keys())
+        current_keys = set(self.cache.keys())
+        
+        # Add new keys
+        for key in current_keys:
+            if key not in existing_keys:
+                # Create a closure to capture the specific key for each source
+                def get_value_for_key(key=key):
+                    return self.read_value(key)
+                
+                # Store the function so we can reuse it
+                self.key_functions[key] = get_value_for_key
+                
+            # Add the source definition
+            new_sources.append({
+                "name": key,
+                "datatype": ua.Variant(0.0, ua.VariantType.Double),
+                "historize": True,
+                "historize_length": 1000,
+                "func": self.key_functions[key],
+                "writable": True
+            })
+            
+        # Remove functions for keys that no longer exist
+        for key in existing_keys - current_keys:
+            del self.key_functions[key]
+            
+        # Only update if this isn't the initial setup
+        if self.sources:
+            logging.info(f"Spectral sources updated, added: {current_keys - existing_keys}, removed: {existing_keys - current_keys}")
+            
+        self.sources = new_sources
+
+    def update_cache(self):
+        """
+        Updates the cached data from the API endpoint
+        """
+        try:
+            # Sending the GET request to the specified endpoint
+            response = requests.get(self.base_url, timeout=10)
+            response.raise_for_status()
+            
+            # Store the old keys to detect changes
+            old_keys = set(self.cache.keys()) if self.cache else set()
+            
+            # Update the cache
+            self.cache = response.json()
+            self.last_update = time.time()
+            
+            # Check if the set of keys has changed
+            new_keys = set(self.cache.keys())
+            if old_keys != new_keys:
+                self.initialize_sources()
+            
+        except Exception as e:
+            # If update fails, keep the old cache but log the error
+            if self.cache is None:  # Only raise if we don't have any data yet
+                raise
+            logging.error(f"Failed to update spectral data: {str(e)}")
+
+    def read_value(self, key):
+        """
+        Returns a specific value from the cached audio data.
+        
+        Args:
+            key (str): The specific frequency key to retrieve
+            
+        Returns:
+            float: The value for the specified key
+        """
+        # Check if we need to update the cache
+        if time.time() - self.last_update > self.update_interval:
+            self.update_cache()
+            
+        # Return the specific value for the requested key
+        if self.cache and key in self.cache:
+            return float(self.cache[key])
+        
+        # If key is not found, return 0.0 and log error
+        logging.error(f"Key {key} not found in spectral data")
+        return 0.0

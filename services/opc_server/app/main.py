@@ -3,7 +3,7 @@ import sys
 import logging
 from asyncua import ua, Server
 from asyncua.server.history_sql import HistorySQLite
-from sensors import RandomSensor, ThermalSensor, RPMSensor
+from sensors import RandomSensor, ThermalSensor, RPMSensor, AudioSensorMfcc, AudioSensorSpectral
 
 logging.basicConfig(level=logging.WARN, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -34,6 +34,8 @@ async def main():
     devices.append(ThermalSensor(prefix="Upper", base_url="http://dmz-sensors/temperature_upper"))
     devices.append(ThermalSensor(prefix="Lower", base_url="http://dmz-sensors/temperature_lower"))
     devices.append(RPMSensor(base_url="http://dmz-sensors/rpm"))
+    devices.append(AudioSensorMfcc(base_url="http://dmz-sensors/mfcc"))
+    devices.append(AudioSensorSpectral(base_url="http://dmz-sensors/spectral"))
 
     # populating our address space
     opcuaComponents = []
