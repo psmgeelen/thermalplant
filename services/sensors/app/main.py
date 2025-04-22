@@ -7,6 +7,8 @@ from slowapi.errors import RateLimitExceeded
 from fastapi_health import health
 from sensors import TempSensor, RPMSensor, RPMSensorSettings, AudioHandler, AudioHandlerSettings
 import logging
+import math
+import psutil
 
 # Setup Logger
 logging.basicConfig(
@@ -476,7 +478,6 @@ def _healthcheck_system_resources():
         False: If resources are critically low
     """
     try:
-        import psutil
         
         # CPU usage
         cpu_percent = psutil.cpu_percent(interval=0.5)
@@ -558,21 +559,17 @@ def _healthcheck_settings_integrity():
         logger.error(f"Settings integrity check failed: {str(e)}")
         return False
 
-def _healthcheck_spi():
-    sensor = TempSensor(spi_port=1, chip_select=0)
-    temp = sensor.read_temperature()
-    sensor.close()
-    if type(temp) == float:
-        return str(temp)
-    else:
-        return False
-
 
 app.add_api_route(
     "/health",
     health(
         [
             _healthcheck_ping,
+            _healthcheck_temp_sensors,
+            _healthcheck_rpm_sensor,
+            _healthcheck_audio_sensor,
+            _healthcheck_system_resources,
+            _healthcheck_settings_integrity,
         ]
     ),
             summary="Perform comprehensive system health verification and hardware connectivity tests",
@@ -588,43 +585,43 @@ app.add_api_route(
     ),
 )
     
-    # Individual component health checks
-    app.add_api_route(
+# Individual component health checks
+app.add_api_route(
     "/health/network",
     health([_healthcheck_ping]),
     summary="Check network connectivity status",
     description="Verifies external network connectivity by pinging a reliable external host.",
     response_description="Returns HTTP 200 if network connectivity is available."
-    )
-    
-    app.add_api_route(
+)
+
+app.add_api_route(
     "/health/temperature",
     health([_healthcheck_temp_sensors]),
     summary="Check temperature sensor status",
     description="Verifies that temperature sensors are operational and providing valid readings.",
     response_description="Returns HTTP 200 if temperature sensors are functioning correctly."
-    )
-    
-    app.add_api_route(
+)
+
+app.add_api_route(
     "/health/rpm",
     health([_healthcheck_rpm_sensor]),
     summary="Check RPM sensor status",
     description="Verifies that the RPM sensor is operational and providing plausible readings.",
     response_description="Returns HTTP 200 if the RPM sensor is functioning correctly."
-    )
-    
-    app.add_api_route(
+)
+
+app.add_api_route(
     "/health/audio",
     health([_healthcheck_audio_sensor]),
     summary="Check audio processing system status",
     description="Verifies that the audio capture and processing system is operational.",
     response_description="Returns HTTP 200 if audio sensors and processing are functioning correctly."
-    )
-    
-    app.add_api_route(
+)
+
+app.add_api_route(
     "/health/system",
     health([_healthcheck_system_resources]),
     summary="Check system resource status",
     description="Monitors system resources to ensure adequate capacity for sensor operations.",
     response_description="Returns HTTP 200 if system resources are at acceptable levels."
-    )
+)
