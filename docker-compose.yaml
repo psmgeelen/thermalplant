@@ -1,6 +1,8 @@
 ---
 x-sensors-base: &sensors-base
-  build: ./services/sensors
+  build: 
+    context: ./services/sensors
+    no_cache: true
   privileged: true
   restart: always
   volumes:
@@ -12,6 +14,7 @@ x-sensors-base: &sensors-base
     interval: 5s
     timeout: 5s
     retries: 20
+
 
 services:
   portainer:

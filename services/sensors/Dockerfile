@@ -13,6 +13,12 @@ COPY pyproject.toml poetry.lock ./
 
 # Install system dependencies including those needed for GPIO
 RUN apt update && apt install -y \
+        build-essential \
+        python3-dev \
+        libasound2 \
+        libasound2-dev \
+        portaudio19-dev \
+        alsa-utils \
         gcc \
         libportaudio2 \
         portaudio19-dev \
