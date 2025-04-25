@@ -859,9 +859,6 @@ app.add_api_route(
     "/health",
     async_health_dependency([
         _healthcheck_ping,
-        _healthcheck_temp_sensors,
-        _healthcheck_rpm_sensor,
-        _healthcheck_audio_sensor,
         _healthcheck_system_resources,
         _healthcheck_settings_integrity,
     ]),
