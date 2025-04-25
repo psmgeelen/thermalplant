@@ -871,7 +871,14 @@ class AudioHandler:
                         time.sleep(1.0)
                         continue
                         
-                return self.spectrum_buffer[-1]
+                    spectrum_data = self.spectrum_buffer[-1]
+                    
+                    # Add count field to match MFCC output format
+                    if isinstance(spectrum_data, dict) and "count" not in spectrum_data:
+                        spectrum_data = spectrum_data.copy()
+                        spectrum_data["count"] = len(spectrum_data) - 1 if "count" not in spectrum_data else spectrum_data["count"]
+                            
+                    return spectrum_data
                 
             except Exception as e:
                 last_error = e
