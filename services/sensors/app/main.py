@@ -83,28 +83,49 @@ async def initialize_rpm_sensor():
         raise
 
 
+import time
+
 async def initialize_audio_handler():
     global audio_sensor
-    try:
-        # If the sensor exists, close it first
-        if "audio_sensor" in globals() and audio_sensor is not None:
-            try:
-                audio_sensor.close()
-            except Exception as e:
-                logger.warning(f"Error closing existing audio handler: {e}")
+    max_retries = 3
+    retry_delay = 2  # seconds
+    last_exception = None
 
-        audio_sensor = AudioHandler(
-            rate=AUDIO_RATE,
-            channels=AUDIO_CHANNELS,
-            sample_duration=audio_settings.sample_duration,
-            mfcc_count=audio_settings.mfcc_count,
-            buffer_size=audio_settings.buffer_size,
-        )
-        logger.info(f"Audio handler initialized with settings: {audio_settings.dict()}")
-        return audio_sensor
-    except Exception as e:
-        logger.error(f"Error initializing audio handler: {e}")
-        raise
+    for attempt in range(max_retries):
+        try:
+            # If the sensor exists, close it first
+            if "audio_sensor" in globals() and audio_sensor is not None:
+                try:
+                    audio_sensor.close()
+                except Exception as e:
+                    logger.warning(f"Error closing existing audio handler: {e}")
+
+            logger.info(f"Audio initialization attempt {attempt+1}/{max_retries} with settings: {audio_settings.dict()}")
+            
+            audio_sensor = AudioHandler(
+                rate=AUDIO_RATE,
+                channels=AUDIO_CHANNELS,
+                sample_duration=audio_settings.sample_duration,
+                mfcc_count=audio_settings.mfcc_count,
+                buffer_size=audio_settings.buffer_size,
+            )
+            
+            # If we got here without exception, initialization succeeded
+            logger.info(f"Audio handler successfully initialized (attempt {attempt+1}/{max_retries})")
+            return audio_sensor
+            
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"Audio initialization attempt {attempt+1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying audio initialization in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                # Increase delay for next attempt
+                retry_delay *= 1.5
+    
+    # If we reached here, all attempts failed
+    logger.error(f"Failed to initialize audio handler after {max_retries} attempts. Last error: {last_exception}")
+    raise RuntimeError(f"Failed to initialize audio handler: {last_exception}")
 
 
 # Initialize sensors on startup instead of at module level
@@ -116,6 +137,11 @@ def get_rpm_sensor():
     return rpm_sensor
 
 def get_audio_sensor():
+    if audio_sensor is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Audio subsystem is currently unavailable"
+        )
     return audio_sensor
 
 async def get_temp_sensor_upper():
@@ -136,7 +162,13 @@ async def get_temp_sensor_lower():
 async def startup_event():
     global rpm_sensor, audio_sensor
     rpm_sensor = await initialize_rpm_sensor()
-    audio_sensor = await initialize_audio_handler()
+    
+    try:
+        audio_sensor = await initialize_audio_handler()
+    except Exception as e:
+        logger.error(f"Audio handler initialization failed: {e}")
+        logger.warning("Application will continue WITHOUT audio capabilities")
+        audio_sensor = None
 
 
 def my_schema():
@@ -372,7 +404,6 @@ async def get_all_sensors(
     temp_upper: TempSensor = Depends(get_temp_sensor_upper),
     temp_lower: TempSensor = Depends(get_temp_sensor_lower),
     rpm_sensor: RPMSensor = Depends(get_rpm_sensor),
-    audio_sensor: AudioHandler = Depends(get_audio_sensor)
 ):
     # Get temperature readings
     temp_upper_val = temp_upper.read_temperature()
@@ -381,16 +412,23 @@ async def get_all_sensors(
     # Get RPM reading
     rpm = rpm_sensor.read_rpm()
 
-    # Get audio features
-    audio_data = audio_sensor.read_all_audio()
-
     # Combine all data
     all_sensors = {
         "temperature_upper": temp_upper_val,
         "temperature_lower": temp_lower_val,
         "rpm": rpm,
-        "audio": audio_data,
     }
+
+    # Try to get audio features if audio subsystem is available
+    if audio_sensor is not None:
+        try:
+            audio_data = audio_sensor.read_all_audio()
+            all_sensors["audio"] = audio_data
+        except Exception as e:
+            logger.warning(f"Error getting audio data: {e}")
+            all_sensors["audio"] = {"status": "unavailable", "error": str(e)}
+    else:
+        all_sensors["audio"] = {"status": "unavailable", "error": "Audio subsystem not initialized"}
 
     return all_sensors
 
@@ -546,13 +584,19 @@ async def _healthcheck_audio_sensor():
     Returns:
         HealthCheckResponse: Status and details of the health check
     """
-    try:
-        audio_sensor_instance = get_audio_sensor()
-        if audio_sensor_instance is None:
-            return {
-                "status": "error", 
-                "details": {"message": "Audio sensor not initialized"}
+    # First check if audio sensor is even available
+    if audio_sensor is None:
+        return {
+            "status": "warning",  # Use warning instead of error to allow overall health check to pass
+            "details": {
+                "message": "Audio subsystem is disabled or unavailable",
+                "recommendation": "Audio functionality is optional; system can operate without it"
             }
+        }
+        
+    try:
+        # Try to use the sensor directly without the dependency that would raise an exception
+        audio_sensor_instance = audio_sensor
             
         # Check if we can get MFCC data (acoustic features)
         mfcc_data = audio_sensor_instance.read_mfcc()
@@ -588,7 +632,13 @@ async def _healthcheck_audio_sensor():
             }
     except Exception as e:
         logger.error(f"Audio sensor healthcheck failed: {str(e)}")
-        return {"status": "error", "details": {"message": str(e)}}
+        return {
+            "status": "warning",  # Use warning instead of error to allow overall health check to pass
+            "details": {
+                "message": f"Audio sensor check failed: {str(e)}",
+                "recommendation": "Audio functionality is optional; system can operate without it"
+            }
+        }
 
 
 async def _healthcheck_system_resources():
