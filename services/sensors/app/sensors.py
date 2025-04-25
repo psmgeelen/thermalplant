@@ -196,6 +196,11 @@ class RecordingLoop:
         self.pyaudio_instance = None
         self.stream = None
         self.sample_ready = threading.Event()
+        # Watchdog variables
+        self.last_sample_time = 0
+        self.max_silence_duration = 5.0  # seconds without data before watchdog triggers
+        self.watchdog_thread = None
+        self.watchdog_running = False
 
     def start(self, sample_duration: float = 5.0):
         if self.running:
@@ -206,34 +211,56 @@ class RecordingLoop:
         self.chunks_per_sample = int((self.rate * sample_duration) / self.chunk_size)
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-
-    def _run(self):
-        try:
-            self.stream = self.pyaudio_instance.open(
-                format=pyaudio.paInt16,
-                channels=self.channels,
-                rate=self.rate,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=self.chunk_size,
-            )
-
-            # Collect initial sample
-            self._collect_one_sample()
-
-            # Main recording loop
-            while self.running:
-                try:
-                    self._collect_one_sample()
-                    time.sleep(0.01)  # Prevent CPU overuse
-                except Exception as e:
-                    logger.error(f"Error during audio collection: {str(e)}")
+        
+        # Start watchdog
+        self.watchdog_running = True
+        self.last_sample_time = time.time()
+        self.watchdog_thread = threading.Thread(target=self._watchdog_monitor, daemon=True)
+        self.watchdog_thread.start()
+        
+    def _watchdog_monitor(self):
+        """Monitors audio collection and automatically recovers if it stops"""
+        logger.info("Audio collection watchdog started")
+        while self.watchdog_running and self.running:
+            try:
+                time_since_last_sample = time.time() - self.last_sample_time
+                if time_since_last_sample > self.max_silence_duration:
+                    logger.warning(f"Audio collection appears to have stopped! "
+                                  f"No samples for {time_since_last_sample:.1f} seconds. "
+                                  f"Attempting recovery...")
+                    
+                    # Try to restart the stream
                     if self.stream:
                         try:
                             self.stream.stop_stream()
                             self.stream.close()
-    
-                            # Reopen stream
+                        except Exception as e:
+                            logger.error(f"Error closing stalled stream: {str(e)}")
+                    
+                    try:
+                        # Reopen stream
+                        self.stream = self.pyaudio_instance.open(
+                            format=pyaudio.paInt16,
+                            channels=self.channels,
+                            rate=self.rate,
+                            input=True,
+                            input_device_index=self.device_index,
+                            frames_per_buffer=self.chunk_size,
+                        )
+                        logger.info("Audio stream successfully restarted by watchdog")
+                        self.last_sample_time = time.time()  # Reset timer after recovery
+                    except Exception as e:
+                        logger.error(f"Watchdog failed to restart audio stream: {str(e)}")
+                        
+                        # Try to completely reinitialize PyAudio
+                        try:
+                            if self.pyaudio_instance:
+                                self.pyaudio_instance.terminate()
+                            
+                            # Create new PyAudio instance
+                            self.pyaudio_instance = pyaudio.PyAudio()
+                            
+                            # Reopen stream with new instance
                             self.stream = self.pyaudio_instance.open(
                                 format=pyaudio.paInt16,
                                 channels=self.channels,
@@ -242,31 +269,140 @@ class RecordingLoop:
                                 input_device_index=self.device_index,
                                 frames_per_buffer=self.chunk_size,
                             )
-                        except Exception as reopen_error:
-                            # If reopening fails, break the loop to prevent orphaned processes
-                            logger.error(f"Failed to reopen audio stream: {str(reopen_error)}")
-                            self.running = False
+                            logger.info("PyAudio completely reinitialized by watchdog")
+                            self.last_sample_time = time.time()
+                        except Exception as reinit_error:
+                            logger.error(f"Watchdog failed to reinitialize PyAudio: {str(reinit_error)}")
+            except Exception as e:
+                logger.error(f"Error in audio watchdog: {str(e)}")
+                
+            # Check every second
+            time.sleep(1.0)
+
+    def _run(self):
+        max_retries = 5
+        retry_delay = 1.0
+        retry_count = 0
+        
+        while self.running:
+            try:
+                # Initialize the audio stream
+                logger.info(f"Initializing audio stream (attempt {retry_count + 1})")
+                self.stream = self.pyaudio_instance.open(
+                    format=pyaudio.paInt16,
+                    channels=self.channels,
+                    rate=self.rate,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=self.chunk_size,
+                )
+    
+                # Reset retry count after successful initialization
+                retry_count = 0
+                
+                # Update last sample time
+                self.last_sample_time = time.time()
+                
+                # Collect initial sample
+                if not self._collect_one_sample():
+                    logger.warning("Failed to collect initial audio sample, retrying...")
+                    continue
+    
+                # Main recording loop
+                consecutive_failures = 0
+                while self.running:
+                    try:
+                        if self._collect_one_sample():
+                            # Reset failure counter on success
+                            consecutive_failures = 0
+                        else:
+                            consecutive_failures += 1
+                            logger.warning(f"Failed to collect audio sample ({consecutive_failures} consecutive failures)")
+                            
+                            # If too many consecutive failures, restart the stream
+                            if consecutive_failures >= 3:
+                                logger.warning("Too many consecutive collection failures, restarting stream")
+                                break
+                                
+                        time.sleep(0.01)  # Prevent CPU overuse
+                    except Exception as e:
+                        logger.error(f"Error during audio collection: {str(e)}")
+                        consecutive_failures += 1
+                        
+                        # Break loop to restart stream after too many errors
+                        if consecutive_failures >= 3:
+                            logger.warning("Too many consecutive errors, restarting stream")
                             break
-        except Exception as outer_error:
-            logger.error(f"Critical error in recording loop: {str(outer_error)}")
-            self.running = False
-        finally:
-            self._cleanup()
+                            
+                        # Brief pause after error
+                        time.sleep(0.5)
+                
+                # If we reach here, the inner loop broke - clean up the stream
+                if self.stream:
+                    try:
+                        self.stream.stop_stream()
+                        self.stream.close()
+                        self.stream = None
+                    except Exception as close_error:
+                        logger.error(f"Error closing stream: {str(close_error)}")
+                        self.stream = None
+                
+            except Exception as outer_error:
+                logger.error(f"Critical error in recording loop: {str(outer_error)}")
+                retry_count += 1
+                
+                # If too many retries, give up
+                if retry_count >= max_retries and self.running:
+                    logger.error(f"Failed to initialize audio after {max_retries} attempts, giving up")
+                    self.running = False
+                    break
+                
+                # Wait before retrying
+                time.sleep(retry_delay)
+                
+                # Increase retry delay (exponential backoff)
+                retry_delay = min(retry_delay * 1.5, 10.0)
+                
+                # Release existing resources before retry
+                self._cleanup()
+                
+                # Try to reinitialize PyAudio on major failures
+                if retry_count > 1 and self.pyaudio_instance:
+                    try:
+                        self.pyaudio_instance.terminate()
+                        time.sleep(1.0)  # Give system time to release audio resources
+                        self.pyaudio_instance = pyaudio.PyAudio()
+                        logger.info("PyAudio reinitialized after failure")
+                    except Exception as pa_error:
+                        logger.error(f"Failed to reinitialize PyAudio: {str(pa_error)}")
+        
+        # Final cleanup when loop ends
+        self._cleanup()
 
     def _collect_one_sample(self):
         frames = []
         for _ in range(self.chunks_per_sample):
             if not self.running:
                 break
-            data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-            frames.append(data)
-
+            try:
+                data = self.stream.read(self.chunk_size, exception_on_overflow=False)
+                frames.append(data)
+            except (IOError, OSError) as e:
+                # Handle common audio stream errors
+                logger.error(f"Error reading from audio stream: {str(e)}")
+                # Break the loop to trigger recovery
+                break
+    
         if frames and self.running:
             audio_data = b"".join(frames)
             logger.info(f"Adding audio chunk..")
             self.audio_buffer.append(audio_data)
             self.sample_ready.set()
             self.sample_ready.clear()
+            # Update last sample time for watchdog
+            self.last_sample_time = time.time()
+            return True
+        return False
 
     def _cleanup(self):#
         if self.stream:
@@ -282,9 +418,17 @@ class RecordingLoop:
             return
 
         self.running = False
+        self.watchdog_running = False
+        
+        # Stop main thread
         if self.thread:
             self.thread.join(timeout=2)
             self.thread = None
+            
+        # Stop watchdog thread
+        if self.watchdog_thread:
+            self.watchdog_thread.join(timeout=2)
+            self.watchdog_thread = None
 
         self._cleanup()
 
@@ -575,67 +719,282 @@ class AudioHandler:
         self.sync_thread.start()
 
     def _sync_processed_data(self):
+        # Track number of successive failures to determine when to attempt recovery
+        failure_count = 0
+        last_successful_sync = time.time()
+        recovery_in_progress = False
+        
         while self.running:
             try:
+                # Check health of processing loop
+                if not hasattr(self, 'processing_loop') or not self.processing_loop:
+                    logger.error("Processing loop unavailable, attempting recovery")
+                    self._recover_audio_components()
+                    time.sleep(1.0)
+                    continue
+                
+                # Check health of recording loop 
+                if not hasattr(self, 'recording_loop') or not self.recording_loop:
+                    logger.error("Recording loop unavailable, attempting recovery")
+                    self._recover_audio_components()
+                    time.sleep(1.0)
+                    continue
+                
                 if self.processing_loop.is_ready():
                     # Sync MFCC data
                     latest_mfcc = self.processing_loop.get_latest_mfcc()
                     if latest_mfcc is not None:
                         # For dictionaries, we just replace them (no need for np.array_equal)
                         self.mfcc_buffer.append(latest_mfcc)
-
+    
                     # Sync spectrum data
                     latest_spectrum = self.processing_loop.get_latest_spectrum()
                     if latest_spectrum is not None:
                         self.spectrum_buffer.append(latest_spectrum)
-
+    
                     self.data_ready_event.set()
+                    
+                    # Reset failure tracking on successful sync
+                    failure_count = 0
+                    last_successful_sync = time.time()
+                    recovery_in_progress = False
+                else:
+                    # Check if we've gone too long without successful data
+                    time_since_last_sync = time.time() - last_successful_sync
+                    if time_since_last_sync > 10.0 and not recovery_in_progress:  # 10 seconds without data
+                        logger.warning(f"No audio data processed for {time_since_last_sync:.1f} seconds, attempting recovery")
+                        self._recover_audio_components()
+                        recovery_in_progress = True
+                        time.sleep(1.0)
+                        continue
+                
                 time.sleep(0.1)  # Prevent CPU overuse
             except AttributeError as ae:
-                logger.error(f"Attribute error in sync thread (likely during shutdown): {str(ae)}")
-                self.running = False
-                break
+                logger.error(f"Attribute error in sync thread: {str(ae)}")
+                failure_count += 1
+                if failure_count >= 3 and not recovery_in_progress:
+                    logger.warning("Multiple attribute errors, attempting to recover audio components")
+                    self._recover_audio_components()
+                    recovery_in_progress = True
+                    failure_count = 0
+                time.sleep(0.5)
             except RuntimeError as re:
                 logger.error(f"Runtime error in sync thread: {str(re)}")
-                self.running = False
-                break
+                failure_count += 1
+                if failure_count >= 3 and not recovery_in_progress:
+                    logger.warning("Multiple runtime errors, attempting to recover audio components")
+                    self._recover_audio_components()
+                    recovery_in_progress = True
+                    failure_count = 0
+                time.sleep(0.5)
             except Exception as e:
                 logger.error(f"Unexpected error in sync thread: {str(e)}")
-                # If sync fails, stop everything to prevent orphaned processes
-                self.running = False
-                break
+                failure_count += 1
+                if failure_count >= 3 and not recovery_in_progress:
+                    logger.warning("Multiple errors in sync thread, attempting to recover audio components")
+                    self._recover_audio_components()
+                    recovery_in_progress = True  
+                    failure_count = 0
+                time.sleep(0.5)
 
     def read_mfcc(self):
-        if not self.mfcc_buffer:
-            # Wait briefly for data to become available
-            if not self.data_ready_event.wait(timeout=2.0):
-                raise RuntimeError("No MFCC data available after timeout")
-
-        # Check that we have data
-        if not self.mfcc_buffer:
-            raise RuntimeError("No MFCC data available")
-
-        return self.mfcc_buffer[-1]
-
+        # If buffer is empty, check if we need recovery
+        last_error = None
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.mfcc_buffer:
+                    # Wait briefly for data to become available
+                    if not self.data_ready_event.wait(timeout=2.0):
+                        logger.warning(f"No MFCC data available after timeout (attempt {attempt+1}/{max_retries})")
+                        if attempt == max_retries - 1:
+                            raise RuntimeError("No MFCC data available after timeout")
+                        else:
+                            # Try recovery before final attempt
+                            self._recover_audio_components()
+                            time.sleep(1.0)
+                            continue
+    
+                # Check that we have data
+                if not self.mfcc_buffer:
+                    logger.warning(f"No MFCC data in buffer (attempt {attempt+1}/{max_retries})")
+                    if attempt == max_retries - 1:
+                        raise RuntimeError("No MFCC data available")
+                    else:
+                        # Try recovery before final attempt
+                        self._recover_audio_components()
+                        time.sleep(1.0)
+                        continue
+                        
+                return self.mfcc_buffer[-1]
+                
+            except Exception as e:
+                last_error = e
+                logger.error(f"Error in read_mfcc (attempt {attempt+1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    # Try recovery before final attempt
+                    self._recover_audio_components()
+                    time.sleep(1.0)
+        
+        # If we get here, all attempts failed
+        logger.error("All attempts to read MFCC data failed")
+        raise last_error or RuntimeError("Failed to read MFCC data after multiple attempts")
+    
     def read_spectrum(self):
-        if not self.spectrum_buffer:
-            # Wait briefly for data to become available
-            if not self.data_ready_event.wait(timeout=2.0):
-                raise RuntimeError("No spectrum data available after timeout")
-
-        # Check that we have data
-        if not self.spectrum_buffer:
-            raise RuntimeError("No spectrum data available")
-
-        return self.spectrum_buffer[-1]
+        # If buffer is empty, check if we need recovery
+        last_error = None
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.spectrum_buffer:
+                    # Wait briefly for data to become available
+                    if not self.data_ready_event.wait(timeout=2.0):
+                        logger.warning(f"No spectrum data available after timeout (attempt {attempt+1}/{max_retries})")
+                        if attempt == max_retries - 1:
+                            raise RuntimeError("No spectrum data available after timeout")
+                        else:
+                            # Try recovery before final attempt
+                            self._recover_audio_components()
+                            time.sleep(1.0)
+                            continue
+    
+                # Check that we have data
+                if not self.spectrum_buffer:
+                    logger.warning(f"No spectrum data in buffer (attempt {attempt+1}/{max_retries})")
+                    if attempt == max_retries - 1:
+                        raise RuntimeError("No spectrum data available")
+                    else:
+                        # Try recovery before final attempt
+                        self._recover_audio_components()
+                        time.sleep(1.0)
+                        continue
+                        
+                return self.spectrum_buffer[-1]
+                
+            except Exception as e:
+                last_error = e
+                logger.error(f"Error in read_spectrum (attempt {attempt+1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    # Try recovery before final attempt
+                    self._recover_audio_components()
+                    time.sleep(1.0)
+        
+        # If we get here, all attempts failed
+        logger.error("All attempts to read spectrum data failed")
+        raise last_error or RuntimeError("Failed to read spectrum data after multiple attempts")
 
     def read_all_audio(self):
         """Return a combined dictionary with all audio data"""
-        mfcc_data = self.read_mfcc()
-        spectrum_data = self.read_spectrum()
+        result = {}
+        
+        # Try to get MFCC data
+        try:
+            mfcc_data = self.read_mfcc()
+            result["mfcc"] = mfcc_data
+        except Exception as e:
+            logger.error(f"Error reading MFCC data: {str(e)}")
+            result["mfcc"] = {"error": str(e)}
+            
+            # Try recovery once
+            try:
+                self._recover_audio_components()
+                time.sleep(1.0)
+                # Try again after recovery
+                mfcc_data = self.read_mfcc()
+                result["mfcc"] = mfcc_data
+            except Exception as recovery_error:
+                logger.error(f"Failed to get MFCC data after recovery: {str(recovery_error)}")
+        
+        # Try to get spectrum data
+        try:
+            spectrum_data = self.read_spectrum()
+            result["spectrum"] = spectrum_data
+        except Exception as e:
+            logger.error(f"Error reading spectrum data: {str(e)}")
+            result["spectrum"] = {"error": str(e)}
+            
+            # Only try recovery if we haven't already tried above
+            if "error" not in result.get("mfcc", {}):
+                try:
+                    self._recover_audio_components()
+                    time.sleep(1.0)
+                    # Try again after recovery
+                    spectrum_data = self.read_spectrum()
+                    result["spectrum"] = spectrum_data
+                except Exception as recovery_error:
+                    logger.error(f"Failed to get spectrum data after recovery: {str(recovery_error)}")
+    
+        return result
 
-        return {"mfcc": mfcc_data, "spectrum": spectrum_data}
-
+    def _recover_audio_components(self):
+        """Internal method to recover audio components without fully restarting"""
+        logger.info("Attempting to recover audio components")
+        
+        # First, try to stop existing components
+        if hasattr(self, "processing_loop"):
+            try:
+                self.processing_loop.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping processing loop during recovery: {str(e)}")
+        
+        if hasattr(self, "recording_loop"):
+            try:
+                self.recording_loop.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping recording loop during recovery: {str(e)}")
+        
+        # Brief pause to allow resources to be released
+        time.sleep(1.0)
+        
+        try:
+            # Recreate recording loop
+            matches = self._find_audio_device()
+            if len(matches) == 0:
+                logger.error("No audio device found during recovery")
+                return
+            
+            # Reinitialize recording loop
+            self.recording_loop = RecordingLoop(
+                device_index=self.device_index,
+                rate=self.rate,
+                channels=self.channels,
+                chunk_size=1024,
+            )
+            self.recording_loop.start(sample_duration=self.sample_duration)
+            
+            # Wait for first audio sample
+            if not self.recording_loop.wait_for_data(timeout=5):
+                logger.error("Could not record audio during recovery")
+                return
+                
+            # Recreate processing loop
+            self.processing_loop = ProcessingLoop(
+                rate=self.rate, mfcc_count=self.mfcc_count, n_fft=2048
+            )
+            self.processing_loop.start(self.recording_loop.get_audio_data)
+            
+            # Wait for initial processing
+            if not self.processing_loop.wait_for_processing(timeout=5):
+                logger.error("Could not process audio during recovery")
+                return
+                
+            # Get initial processed data to validate recovery
+            initial_mfcc = self.processing_loop.get_latest_mfcc()
+            initial_spectrum = self.processing_loop.get_latest_spectrum()
+            
+            if initial_mfcc is not None and initial_spectrum is not None:
+                logger.info("Audio components successfully recovered")
+                self.mfcc_buffer.append(initial_mfcc)
+                self.spectrum_buffer.append(initial_spectrum)
+                self.data_ready_event.set()
+            else:
+                logger.error("Audio recovery failed: no data available after reinitializing components")
+                
+        except Exception as e:
+            logger.error(f"Error during audio component recovery: {str(e)}")
+    
     def close(self):
         self.running = False
 
