@@ -35,7 +35,7 @@ async def main():
     devices.append(ThermalSensor(prefix="Lower", base_url="http://dmz-sensors/temperature_lower"))
     devices.append(RPMSensor(base_url="http://dmz-sensors/rpm"))
     devices.append(AudioSensorMfcc(base_url="http://dmz-sensors/mfcc"))
-    devices.append(AudioSensorSpectral(base_url="http://dmz-sensors/spectral"))
+    devices.append(AudioSensorSpectral(base_url="http://dmz-sensors/spectrum"))
 
     # populating our address space
     opcuaComponents = []

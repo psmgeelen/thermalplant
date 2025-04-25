@@ -174,7 +174,7 @@ services:
       - fullstack
       - opc
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://0.0.0.0/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 20
