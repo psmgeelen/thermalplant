@@ -23,11 +23,13 @@ RUN apt update && apt install -y \
         libportaudio2 \
         portaudio19-dev \
         curl
-   
+    
+RUN apt-get install pkg-config libxml2-dev libxmlsec1-dev libxmlsec1-openssl -y
 
 RUN poetry install --without dev --no-root
 
 # Copy application code after dependencies are installed
 COPY app/ /app
+
 
 CMD ["poetry", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8123", "--reload"]

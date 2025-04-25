@@ -263,11 +263,12 @@ class RecordingLoop:
 
         if frames and self.running:
             audio_data = b"".join(frames)
+            logger.info(f"Adding audio chunk..")
             self.audio_buffer.append(audio_data)
             self.sample_ready.set()
             self.sample_ready.clear()
 
-    def _cleanup(self):
+    def _cleanup(self):#
         if self.stream:
             try:
                 self.stream.stop_stream()

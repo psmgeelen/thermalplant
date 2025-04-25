@@ -3,10 +3,16 @@ x-sensors-base: &sensors-base
   build: 
     context: ./services/sensors
     no_cache: true
+  group_add:
+    - audio
   privileged: true
   restart: always
   volumes:
     - "/dev:/dev"
+    - /run/user/1000/pulse:/run/pulse
+
+  devices:
+    - /dev/snd:/dev/snd
   networks:
     - sensors-network
   healthcheck:
