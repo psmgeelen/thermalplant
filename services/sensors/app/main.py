@@ -452,26 +452,84 @@ async def get_all_settings(request: Request):
 
 
 ##### Healthchecks #####
+import socket
+
 async def _healthcheck_ping():
     """
-    Verifies external network connectivity by pinging a reliable external host.
-
+    Verifies external network connectivity by checking socket connection to a reliable external host.
+    
     This is critical for systems that need to report data to external services
     or receive commands from remote systems. Network connectivity issues can
     cause data loss or prevent remote monitoring of the system.
+    
+    Uses pure Python socket implementation rather than OS-level ping commands,
+    making it more portable and container-friendly.
 
     Returns:
         HealthCheckResponse: Status and details of the health check
     """
-    hostname = "google.com"  # Reliable external host
+    hostname = "8.8.8.8"  # Google DNS - highly reliable and typically accessible
+    port = 53  # DNS port
+    timeout = 2  # seconds
+    
     try:
-        response = os.system("ping -c 1 -W 2 " + hostname)  # 2-second timeout
-        if response == 0:
-            return {"status": "ok", "details": {"response_code": str(response)}}
+        # Create a socket object with a timeout
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        
+        # Start measuring connection time
+        start_time = time.time()
+        
+        # Attempt to connect to the host
+        result = sock.connect_ex((hostname, port))
+        
+        # Calculate response time
+        response_time = (time.time() - start_time) * 1000  # convert to milliseconds
+        
+        # Close the socket
+        sock.close()
+        
+        if result == 0:
+            return {
+                "status": "ok",
+                "details": {
+                    "connected_to": f"{hostname}:{port}",
+                    "response_time_ms": round(response_time, 2)
+                }
+            }
         else:
-            return {"status": "error", "details": {"message": f"Ping failed with code {response}"}}
+            return {
+                "status": "error",
+                "details": {
+                    "message": f"Connection failed with error code {result}",
+                    "socket_error": socket.errno.errorcode.get(result, "Unknown error")
+                }
+            }
+            
+    except socket.gaierror as e:
+        return {
+            "status": "error",
+            "details": {
+                "message": f"Address-related error: {str(e)}",
+                "error_type": "DNS resolution failure"
+            }
+        }
+    except socket.timeout:
+        return {
+            "status": "error",
+            "details": {
+                "message": f"Connection to {hostname}:{port} timed out after {timeout} seconds",
+                "error_type": "Connection timeout"
+            }
+        }
     except Exception as e:
-        return {"status": "error", "details": {"message": str(e)}}
+        return {
+            "status": "error",
+            "details": {
+                "message": str(e),
+                "error_type": type(e).__name__
+            }
+        }
 
 
 async def _healthcheck_temp_sensors():
