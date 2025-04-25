@@ -664,21 +664,21 @@ async def _healthcheck_settings_integrity():
     cause operational problems.
 
     Returns:
-        HealthCheckResponse: Status and details of the health check
+        dict: Status and details of the health check
     """
     try:
         # Check RPM sensor settings using Pydantic model attributes
         rpm_valid = (
-            rpm_settings.measurement_window > 0
-            and rpm_settings.measurement_interval > 0
-            and rpm_settings.sample_size > 0
+            hasattr(rpm_settings, 'measurement_window') and rpm_settings.measurement_window > 0
+            and hasattr(rpm_settings, 'measurement_interval') and rpm_settings.measurement_interval > 0
+            and hasattr(rpm_settings, 'sample_size') and rpm_settings.sample_size > 0
         )
 
         # Check audio settings using Pydantic model attributes
         audio_valid = (
-            audio_settings.sample_duration > 0
-            and audio_settings.mfcc_count > 0
-            and audio_settings.buffer_size > 0
+            hasattr(audio_settings, 'sample_duration') and audio_settings.sample_duration > 0
+            and hasattr(audio_settings, 'mfcc_count') and audio_settings.mfcc_count > 0
+            and hasattr(audio_settings, 'buffer_size') and audio_settings.buffer_size > 0
         )
 
         if rpm_valid and audio_valid:
@@ -696,20 +696,20 @@ async def _healthcheck_settings_integrity():
             
             if not rpm_valid:
                 issues.append("RPM settings invalid")
-                if rpm_settings.measurement_window <= 0:
+                if not hasattr(rpm_settings, 'measurement_window') or rpm_settings.measurement_window <= 0:
                     rpm_issues["measurement_window"] = "must be positive"
-                if rpm_settings.measurement_interval <= 0:
+                if not hasattr(rpm_settings, 'measurement_interval') or rpm_settings.measurement_interval <= 0:
                     rpm_issues["measurement_interval"] = "must be positive"
-                if rpm_settings.sample_size <= 0:
+                if not hasattr(rpm_settings, 'sample_size') or rpm_settings.sample_size <= 0:
                     rpm_issues["sample_size"] = "must be positive"
                     
             if not audio_valid:
                 issues.append("Audio settings invalid")
-                if audio_settings.sample_duration <= 0:
+                if not hasattr(audio_settings, 'sample_duration') or audio_settings.sample_duration <= 0:
                     audio_issues["sample_duration"] = "must be positive"
-                if audio_settings.mfcc_count <= 0:
+                if not hasattr(audio_settings, 'mfcc_count') or audio_settings.mfcc_count <= 0:
                     audio_issues["mfcc_count"] = "must be positive" 
-                if audio_settings.buffer_size <= 0:
+                if not hasattr(audio_settings, 'buffer_size') or audio_settings.buffer_size <= 0:
                     audio_issues["buffer_size"] = "must be positive"
                     
             logger.warning(f"Settings integrity check failed: {', '.join(issues)}")
@@ -728,33 +728,35 @@ async def _healthcheck_settings_integrity():
 
 
 # Create a custom wrapped health function to handle async health checks
-async def async_health_dependency(health_checks):
+def async_health_dependency(health_checks):
     """
     Custom health check handler that supports async health checks.
     Returns a FastAPI dependency that performs the health checks.
     """
     async def health_endpoint():
+        results = {}
         for check in health_checks:
             result = await check()
+            check_name = check.__name__
+            results[check_name] = result
             # If any check returns a falsy value or an error status, the health check fails
             if not result or (isinstance(result, dict) and result.get("status") == "error"):
-                return {"status": "error", "checks": {check.__name__: result}}
-        return {"status": "ok"}
+                return {"status": "error", "checks": results}
+        return {"status": "ok", "checks": results}
     
     return health_endpoint
 
+# Health check routes with proper function passing
 app.add_api_route(
     "/health",
-    endpoint=async_health_dependency(
-        [
-            _healthcheck_ping,
-            _healthcheck_temp_sensors,
-            _healthcheck_rpm_sensor,
-            _healthcheck_audio_sensor,
-            _healthcheck_system_resources,
-            _healthcheck_settings_integrity,
-        ]
-    ),
+    async_health_dependency([
+        _healthcheck_ping,
+        _healthcheck_temp_sensors,
+        _healthcheck_rpm_sensor,
+        _healthcheck_audio_sensor,
+        _healthcheck_system_resources,
+        _healthcheck_settings_integrity,
+    ]),
     summary="Perform comprehensive system health verification and hardware connectivity tests",
     description=(
         "The healthcheck not only checks whether the service is up, but it will also"
@@ -766,55 +768,62 @@ app.add_api_route(
         "The response is only focused around the status. 200 is OK, anything else and"
         " there is trouble."
     ),
+    response_model=Dict[str, Any]
 )
 
 # Individual component health checks 
 app.add_api_route(
     "/health/network",
-    endpoint=async_health_dependency([_healthcheck_ping]),
+    async_health_dependency([_healthcheck_ping]),
     summary="Check network connectivity status",
     description="Verifies external network connectivity by pinging a reliable external host.",
     response_description="Returns HTTP 200 if network connectivity is available.",
+    response_model=Dict[str, Any]
 )
 
 app.add_api_route(
     "/health/temperature",
-    endpoint=async_health_dependency([_healthcheck_temp_sensors]),
+    async_health_dependency([_healthcheck_temp_sensors]),
     summary="Check temperature sensor status",
     description="Verifies that temperature sensors are operational and providing valid readings.",
     response_description="Returns HTTP 200 if temperature sensors are functioning correctly.",
+    response_model=Dict[str, Any]
 )
 
 app.add_api_route(
     "/health/rpm",
-    endpoint=async_health_dependency([_healthcheck_rpm_sensor]),
+    async_health_dependency([_healthcheck_rpm_sensor]),
     summary="Check RPM sensor status",
     description="Verifies that the RPM sensor is operational and providing plausible readings.",
     response_description="Returns HTTP 200 if the RPM sensor is functioning correctly.",
+    response_model=Dict[str, Any]
 )
 
 app.add_api_route(
     "/health/audio",
-    endpoint=async_health_dependency([_healthcheck_audio_sensor]),
+    async_health_dependency([_healthcheck_audio_sensor]),
     summary="Check audio processing system status",
     description="Verifies that the audio capture and processing system is operational.",
     response_description="Returns HTTP 200 if audio sensors and processing "
                          "are functioning correctly.",
+    response_model=Dict[str, Any]
 )
 
 app.add_api_route(
     "/health/system",
-    endpoint=async_health_dependency([_healthcheck_system_resources]),
+    async_health_dependency([_healthcheck_system_resources]),
     summary="Check system resource status",
     description="Monitors system resources to ensure adequate capacity for sensor operations.",
     response_description="Returns HTTP 200 if system resources are at acceptable levels.",
+    response_model=Dict[str, Any]
 )
 
 # Settings integrity health check
 app.add_api_route(
     "/health/settings",
-    endpoint=async_health_dependency([_healthcheck_settings_integrity]),
+    async_health_dependency([_healthcheck_settings_integrity]),
     summary="Check configuration settings integrity",
     description="Verifies that all sensor settings are valid and consistent.",
     response_description="Returns HTTP 200 if all settings are valid and consistent.",
+    response_model=Dict[str, Any]
 )
