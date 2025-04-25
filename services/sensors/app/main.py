@@ -87,8 +87,8 @@ import time
 
 async def initialize_audio_handler():
     global audio_sensor
-    max_retries = 3
-    retry_delay = 2  # seconds
+    max_retries = 10
+    retry_delay = 1  # seconds
     last_exception = None
 
     for attempt in range(max_retries):

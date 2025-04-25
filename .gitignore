@@ -2,4 +2,5 @@
 **/.env.ci
 **/temp
 .idea/**
-**/_pycache__/**
+**/__pycache__/**
+.
