@@ -86,15 +86,15 @@ async def main():
     try:
         count = 0
         while True:
-            await asyncio.sleep(1) ## Polling rate
+            # await asyncio.sleep(1) ## Polling rate
             # Loop to do Measurements
             for component in opcuaComponents:
                 logging.warning(f"Processing device {component['name']}")
                 for source in component["opcuaVars"]:
                     new_value = source["func"]()
+                    await asyncio.sleep(0.1) ## Polling rate
                     await source["declaredParam"].set_value(new_value)
                     logging.warning(f"Writing value {new_value} to variable {source['name_source']} under device {source['name_device']} with NodeId {source['NodeId']}")
-                    time.sleep(0.3)
 
     finally:
         # close connection, remove subscriptions, etc

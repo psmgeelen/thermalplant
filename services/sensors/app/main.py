@@ -214,7 +214,7 @@ async def ping():
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
-@limiter.limit("500/minute")
+@limiter.limit("1000/minute")
 async def get_temperature_upper(
     request: Request,
     sensor: TempSensor = Depends(get_temp_sensor_upper),
@@ -232,7 +232,7 @@ async def get_temperature_upper(
     response_description="A dictionary with a list of devices",
     response_model=str,
 )
-@limiter.limit("500/minute")
+@limiter.limit("1000/minute")
 async def get_temperature_lower(
     request: Request,
     sensor: TempSensor = Depends(get_temp_sensor_lower),
@@ -247,7 +247,7 @@ async def get_temperature_lower(
     response_description="Current RPM value",
     response_model=float,
 )
-@limiter.limit("500/minute")
+@limiter.limit("1000/minute")
 async def get_rpm(
     request: Request,
     rpm_sensor: RPMSensor = Depends(get_rpm_sensor),
@@ -309,7 +309,7 @@ async def update_rpm_settings(request: Request, settings: RPMSensorSettings):
     ),
     response_description="A dictionary of labeled MFCC coefficients",
 )
-@limiter.limit("500/minute")
+@limiter.limit("1000/minute")
 async def get_mfcc(
     request: Request,
     audio_sensor: AudioHandler = Depends(get_audio_sensor)
@@ -368,7 +368,7 @@ async def update_audio_settings(request: Request, settings: AudioHandlerSettings
     description=("Returns frequency spectrum data with labeled frequency bands"),
     response_description="A dictionary of labeled frequency bands",
 )
-@limiter.limit("500/minute")
+@limiter.limit("1000/minute")
 async def get_spectrum(
     request: Request,
     audio_sensor: AudioHandler = Depends(get_audio_sensor)
