@@ -129,6 +129,8 @@ services:
   opc_server:
     build: ./services/opc_server/
     restart: always
+    ulimits:
+      rtprio: 99
     env_file:
       - .env
     ports:
@@ -147,6 +149,8 @@ services:
   opc_scraper:
     build: ./services/opc_scraper/
     restart: always
+    ulimits:
+      rtprio: 99
     env_file:
       - .env
     networks:

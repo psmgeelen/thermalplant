@@ -4,7 +4,7 @@ import logging
 from asyncua import ua, Server
 from asyncua.server.history_sql import HistorySQLite
 from sensors import RandomSensor, ThermalSensor, RPMSensor, AudioSensorMfcc, AudioSensorSpectral
-
+import time
 logging.basicConfig(level=logging.WARN, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 sys.path.insert(0, "..")
@@ -94,6 +94,7 @@ async def main():
                     new_value = source["func"]()
                     await source["declaredParam"].set_value(new_value)
                     logging.warning(f"Writing value {new_value} to variable {source['name_source']} under device {source['name_device']} with NodeId {source['NodeId']}")
+                    time.sleep(0.3)
 
     finally:
         # close connection, remove subscriptions, etc
