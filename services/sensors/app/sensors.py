@@ -540,6 +540,7 @@ class ProcessingLoop:
 
                         # Create labeled spectrum dictionary by bands
                         spectrum_dict = {}
+                        count = 0
                         for band_label, indices in self.spectrum_bands.items():
                             if indices:  # Only process bands with indices
                                 # Average all frequencies in this band
@@ -549,9 +550,11 @@ class ProcessingLoop:
                                     if i < len(spectrum_avg)
                                 ]
                                 if band_values:
-                                    spectrum_dict[band_label] = float(
+                                    incremented_band_label = f"spectrum_{count}_{band_label.split("spectrum_")[-1]}"
+                                    spectrum_dict[incremented_band_label] = float(
                                         np.mean(band_values)
                                     )
+                                    count += 1
 
                         self.spectrum_buffer.append(spectrum_dict)
 
@@ -870,15 +873,8 @@ class AudioHandler:
                         self._recover_audio_components()
                         time.sleep(1.0)
                         continue
-                        
-                    spectrum_data = self.spectrum_buffer[-1]
-                    
-                    # Add count field to match MFCC output format
-                    if isinstance(spectrum_data, dict) and "count" not in spectrum_data:
-                        spectrum_data = spectrum_data.copy()
-                        spectrum_data["count"] = len(spectrum_data) - 1 if "count" not in spectrum_data else spectrum_data["count"]
                             
-                    return spectrum_data
+                return self.spectrum_buffer[-1]
                 
             except Exception as e:
                 last_error = e
