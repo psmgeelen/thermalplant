@@ -6,9 +6,10 @@ WITH (timescaledb.continuous) AS
 SELECT
     time_bucket('1 minute', timestamp) AS bucketed_time,
     sensorname,
+    tagname,
     AVG(value) AS avg_value
 FROM sensor_data
-GROUP BY bucketed_time, sensorname
+GROUP BY bucketed_time, sensorname, tagname
 ORDER BY bucketed_time ASC
 WITH NO DATA;
 

@@ -174,6 +174,7 @@ class Scraper(object):
             nodeid TEXT NOT NULL, -- Node ID
             clientid TEXT NOT NULL, -- Client ID
             sensorname TEXT NOT NULL, -- Sensor name
+            tagname TEXT, -- Tag name
             value DOUBLE PRECISION, -- Sensor value
             PRIMARY KEY (timestamp, sensorname) -- Composite key on timestamp and sensorname
         );"""
@@ -318,11 +319,16 @@ class Scraper(object):
                     logger.info(
                         f"Fetched data from {sensor_name} (NodeId: {node.nodeid.to_string()}): {value} at {timestamp}")
 
+                    # Get the tag name (browse name) of the node
+                    browse_name = await node.read_browse_name()
+                    tag_name = browse_name.Name
+                    
                     data.append({
                         "timestamp": timestamp,
                         "nodeid": node.nodeid.to_string(),
                         "clientid": str(client),
                         "sensorname": str(sensor_name),
+                        "tagname": tag_name,
                         "value": value
                     })
                 except Exception as value_error:
