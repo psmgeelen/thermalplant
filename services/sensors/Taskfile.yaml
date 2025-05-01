@@ -4,23 +4,22 @@ tasks:
   default:
     desc: Listing all available tasks
     cmds:
-      - task --list-all
+    - task --list-all
   test:
     desc: Run all pytests
     cmds:
-      - task: _install_poetry_deps
-      - task: _test_rpm
-      - task: _test_temp
+    - task: _install_poetry_deps
+    - poetry run pytest -v test/
   _test_rpm:
     desc: Run tests for the RPM sensor implementation using pytest
     cmds:
-      - poetry run pytest -v test/test_temp.py
+    - poetry run pytest -v test/test_temp.py
   _test_temp:
     desc: Run tests for the temperature sensor implementation using pytest
     cmds:
-      - poetry run pytest -v test/test_temp.py
+    - poetry run pytest -v test/test_rpm.py
   _install_poetry_deps:
     desc: Install project dependencies using Poetry package manager without installing the project itself
     cmds:
-      - poetry install --no-root
+    - poetry install --no-root
     run: once
