@@ -197,7 +197,8 @@ class PipeWireRecordingLoop:
     ):
         self.device_index = device_index
         self.device_name = None  # Will be set when finding the device
-        self.rate = rate
+        self.preferred_rate = rate  # Store the preferred rate
+        self.rate = rate  # Will be adjusted if preferred rate isn't supported
         self.channels = channels
         self.chunk_size = chunk_size
         self.running = False
@@ -216,6 +217,10 @@ class PipeWireRecordingLoop:
         
         # Thread pool for async operations
         self.executor = ThreadPoolExecutor(max_workers=2)
+        
+        # Store device capabilities
+        self.supported_rates = []
+        self.default_rate = None
 
     def start(self, sample_duration: float = 5.0):
         if self.running:
@@ -380,13 +385,79 @@ class PipeWireRecordingLoop:
             if not source:
                 raise RuntimeError("No suitable audio source found")
                 
-            logger.info(f"Selected audio source: {source.name}")
+            # Determine the default sample rate and other capabilities
+            self._detect_device_capabilities(source)
+            
+            # Adjust rate if needed
+            self._adjust_sample_rate()
+                
+            logger.info(f"Selected audio source: {source.name} (using rate: {self.rate}Hz)")
             return source
             
         except Exception as e:
             logger.error(f"Failed to setup PipeWire: {str(e)}")
             self._cleanup_pulse_client()
             raise
+            
+    def _detect_device_capabilities(self, source):
+        """Detect capabilities (sample rates, etc.) of the selected audio source"""
+        try:
+            # Get source information
+            source_info = source
+            
+            # Store the sample rate from the source
+            if hasattr(source_info, 'sample_spec') and hasattr(source_info.sample_spec, 'rate'):
+                self.default_rate = source_info.sample_spec.rate
+                logger.info(f"Detected default sample rate: {self.default_rate}Hz")
+            else:
+                # Fallback to common rates if we can't detect
+                self.default_rate = 44100
+                logger.info(f"Could not detect device rate, using fallback: {self.default_rate}Hz")
+            
+            # Common sample rates to test (could be expanded)
+            test_rates = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000]
+            
+            # Start with default and common rates
+            self.supported_rates = [self.default_rate]
+            if self.default_rate not in test_rates:
+                test_rates.append(self.default_rate)
+            
+            # Log device capabilities
+            logger.info(f"Audio device capabilities for {source_info.name}:")
+            logger.info(f"  Default rate: {self.default_rate}Hz")
+            logger.info(f"  Channels: {source_info.sample_spec.channels}")
+            
+            # Note: We don't attempt to test all rates as that would be time-consuming
+            # and might cause issues with some audio servers
+            logger.info(f"  Assuming support for common rates like 44100Hz and 48000Hz")
+            
+            # Add common rates that are typically supported with PipeWire/PulseAudio
+            self.supported_rates = [8000, 11025, 16000, 22050, 32000, 44100, 48000]
+            
+        except Exception as e:
+            logger.warning(f"Error detecting device capabilities: {str(e)}")
+            # Fallback to safe defaults if detection fails
+            self.default_rate = 44100
+            self.supported_rates = [44100, 48000]
+            
+    def _adjust_sample_rate(self):
+        """Adjust the sample rate if the preferred rate isn't supported"""
+        # If preferred rate is in supported rates or we couldn't detect, keep it
+        if not self.supported_rates or self.preferred_rate in self.supported_rates:
+            return
+            
+        # If default rate is available, use that
+        if self.default_rate:
+            logger.warning(f"Preferred sample rate {self.preferred_rate}Hz is not supported. "
+                          f"Using device default rate: {self.default_rate}Hz")
+            self.rate = self.default_rate
+            return
+            
+        # Otherwise find the closest supported rate
+        closest_rate = min(self.supported_rates, key=lambda x: abs(x - self.preferred_rate))
+        logger.warning(f"Preferred sample rate {self.preferred_rate}Hz is not supported. "
+                      f"Using closest available rate: {closest_rate}Hz")
+        self.rate = closest_rate
 
     async def _record_audio(self):
         """Record audio data from the selected PipeWire source"""
@@ -740,11 +811,15 @@ class AudioHandler:
                 
                 # Log all sources for debugging
                 for i, source in enumerate(sources):
+                    # Get default sample rate from the device
+                    default_rate = source.sample_spec.rate if hasattr(source, 'sample_spec') else 44100
+                    
                     device_info = {
                         "index": i,
                         "name": source.name,
                         "description": source.description,
-                        "maxInputChannels": source.channel_count
+                        "maxInputChannels": source.channel_count,
+                        "defaultSampleRate": default_rate
                     }
                     logging.info(f"Found audio device: {device_info}")
                     
@@ -760,11 +835,15 @@ class AudioHandler:
                     default_source_name = server_info.default_source_name
                     for i, source in enumerate(sources):
                         if source.name == default_source_name:
+                            # Get default sample rate
+                            default_rate = source.sample_spec.rate if hasattr(source, 'sample_spec') else 44100
+                            
                             device_info = {
                                 "index": i,
                                 "name": source.name,
                                 "description": source.description,
-                                "maxInputChannels": source.channel_count
+                                "maxInputChannels": source.channel_count,
+                                "defaultSampleRate": default_rate
                             }
                             matches.append(device_info)
                             logging.info(f"Using default source as fallback: {device_info}")
@@ -772,16 +851,29 @@ class AudioHandler:
         except Exception as e:
             logging.error(f"Error finding audio devices with PipeWire: {e}")
             # As a last resort, if we can't find devices through PipeWire, try to return a default device
-            matches.append({"index": 0, "name": "default", "maxInputChannels": 1})
+            matches.append({"index": 0, "name": "default", "maxInputChannels": 1, "defaultSampleRate": 44100})
             
         return matches
 
     def _initialize_audio_components(self):
         # Create and start recording loop with PipeWire
         logger.info(f"Initializing PipeWire recording loop with device index {self.device_index}")
+        
+        # Find matching device to get its capabilities
+        matches = self._find_audio_device()
+        device_rate = self.rate  # Default to our configured rate
+        
+        # If we have a match and it has a defined sample rate, use that instead
+        if matches and "defaultSampleRate" in matches[0]:
+            detected_rate = matches[0]["defaultSampleRate"]
+            if detected_rate != self.rate:
+                logger.info(f"Using detected sample rate from device: {detected_rate}Hz "
+                           f"(instead of configured {self.rate}Hz)")
+                device_rate = detected_rate
+        
         self.recording_loop = PipeWireRecordingLoop(
             device_index=self.device_index,
-            rate=self.rate,
+            rate=device_rate,
             channels=self.channels,
             chunk_size=1024,
         )
