@@ -802,7 +802,7 @@ class AudioHandler:
         # Initialize components
         self._initialize_audio_components()
 
-    def _find_audio_device(self, match_on: str = "USB Audio") -> list:
+    def _find_audio_device(self, match_on: str = "alsa_input.usb-GeneralPlus_USB_Audio_Device-00.mono-fallback") -> list:
         matches = []
         try:
             # Use pulsectl (PipeWire's PulseAudio compatibility layer) to find devices
