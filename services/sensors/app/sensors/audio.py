@@ -6,12 +6,12 @@ import time
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field, validator
 from .utils import get_logger
-import pulsectl
-import threading
-from queue import Queue
-import pulsectl
 import numpy as np
 import time
+import pyaudio
+import pulsectl
+import numpy as np
+from typing import Optional, Dict
 
 
 class AsyncComponent:
@@ -50,9 +50,8 @@ class AsyncComponent:
 
 
 
-
 class PipewireRecordingLoop(AsyncComponent):
-    """Handles audio recording using PipeWire/PulseAudio"""
+    """Handles audio recording using PyAudio with PulseAudio device detection"""
 
     def __init__(self, device_name: str = "USB_Audio_Device-00.mono-fallback", rate: int = 41000, channels: int = 1):
         super().__init__("PipewireRecordingLoop", get_logger(__name__))
@@ -61,27 +60,43 @@ class PipewireRecordingLoop(AsyncComponent):
         self.channels = channels
         self.audio_queue = asyncio.Queue(maxsize=10)
         self.pulse = None
+        self.pa = None
         self.stream = None
+        self.device_index = None
+        self.chunk_size = int(self.rate)  # 1 second chunks
 
     async def _run(self):
         """Main recording loop"""
         try:
-            self.pulse = pulsectl.Pulse('audio-recorder')
+            # Initialize both PulseAudio (for device detection) and PyAudio
+            self.pulse = pulsectl.Pulse('device-detector')
+            self.pa = pyaudio.PyAudio()
+
             await self._setup_recording()
             await self._record_loop()
         except Exception as e:
             self.logger.error(f"Fatal recording error: {e}")
         finally:
-            if self.pulse:
-                self.pulse.close()
+            self._cleanup()
+
+    def _cleanup(self):
+        """Clean up resources"""
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+        if self.pa:
+            self.pa.terminate()
+        if self.pulse:
+            self.pulse.close()
 
     async def _setup_recording(self):
-        """Setup PipeWire recording stream"""
+        """Setup recording by finding the correct device and initializing PyAudio stream"""
         if not self.pulse:
             raise RuntimeError("PulseAudio client not initialized")
 
+        # Get PulseAudio source first
         sources = self.pulse.source_list()
-        self.logger.info(f"Found the following devices: {sources}")
+        self.logger.info(f"Found the following PulseAudio sources: {sources}")
 
         match = []
         for source in sources:
@@ -93,26 +108,48 @@ class PipewireRecordingLoop(AsyncComponent):
         if len(match) == 0:
             raise RuntimeError(f"Audio device {self.device_name} not found")
 
-        # Create the recording stream
-        self.stream = self.pulse.stream_new(
-            name="audio-recorder",
-            samplespec=f's16le {self.rate} {self.channels}'
+        # Find corresponding PyAudio device
+        device_count = self.pa.get_device_count()
+        pulse_source_name = match[0].name
+
+        for i in range(device_count):
+            device_info = self.pa.get_device_info_by_index(i)
+            # PyAudio devices usually contain the PulseAudio source name
+            if pulse_source_name in device_info.get('name', ''):
+                self.device_index = i
+                break
+
+        if self.device_index is None:
+            raise RuntimeError(f"Could not find PyAudio device for {pulse_source_name}")
+
+        # Create PyAudio stream
+        self.stream = self.pa.open(
+            format=pyaudio.paInt16,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            input_device_index=self.device_index,
+            frames_per_buffer=self.chunk_size
         )
 
-        # Connect the stream to the source
-        self.pulse.stream_connect_record(
-            self.stream,
-            match[0].index
-        )
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """Callback for non-blocking PyAudio"""
+        if self.running:
+            asyncio.run_coroutine_threadsafe(
+                self.audio_queue.put(in_data),
+                asyncio.get_event_loop()
+            )
+        return (None, pyaudio.paContinue)
 
     async def _record_loop(self):
         """Record audio data and put it in the queue"""
-        chunk_size = int(self.rate)  # 1 second chunks
+        # Start the stream
+        self.stream.start_stream()
 
-        while self.running:
+        while self.running and self.stream.is_active():
             try:
                 # Read data from the stream
-                data = self.pulse.stream_read(self.stream, chunk_size)
+                data = self.stream.read(self.chunk_size)
                 await self.audio_queue.put(data)
             except Exception as e:
                 self.logger.error(f"Recording error: {e}")
@@ -120,15 +157,8 @@ class PipewireRecordingLoop(AsyncComponent):
 
     async def stop(self):
         """Stop the recording loop and cleanup"""
-        if self.stream:
-            try:
-                self.pulse.stream_disconnect(self.stream)
-            except:
-                pass
-        if self.pulse:
-            self.pulse.close()
+        self._cleanup()
         await super().stop()
-
 
 
 class AudioProcessingLoop(AsyncComponent):
