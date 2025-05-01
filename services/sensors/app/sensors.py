@@ -336,6 +336,7 @@ class PipeWireRecordingLoop:
 
     async def _setup_pipewire(self):
         """Initialize PipeWire connection and find appropriate source"""
+        logger.info("########testing############")
         try:
             # Create a new pulse client
             self.pulse = pulsectl.Pulse('audio-recorder')
