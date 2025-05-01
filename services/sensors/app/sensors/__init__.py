@@ -13,7 +13,7 @@ from .audio import (
     AudioHandler,
     AudioHandlerSettings,
     PipeWireRecordingLoop,
-    ProcessingLoop
+    AudioProcessingLoop
 )
 
 # Define public API for package
@@ -24,5 +24,5 @@ __all__ = [
     'AudioHandler',
     'AudioHandlerSettings',
     'PipeWireRecordingLoop',
-    'ProcessingLoop'
+    'AudioProcessingLoop'
 ]
