@@ -18,7 +18,14 @@ RUN apt update && apt install -y \
         gcc \
         libportaudio2 \
         portaudio19-dev \
-        curl
+        curl\
+        pipewire pipewire-audio-client-libraries libspa-0.2-modules pipewire-bin
+
+
+## AI Assistant
+
+
+
     
 RUN poetry install --without dev --no-root
 

@@ -92,7 +92,7 @@ async def main():
                 logging.warning(f"Processing device {component['name']}")
                 for source in component["opcuaVars"]:
                     new_value = source["func"]()
-                    await asyncio.sleep(0.1) ## Polling rate
+                    await asyncio.sleep(0.4) ## Polling rate
                     await source["declaredParam"].set_value(new_value)
                     logging.warning(f"Writing value {new_value} to variable {source['name_source']} under device {source['name_device']} with NodeId {source['NodeId']}")
 
