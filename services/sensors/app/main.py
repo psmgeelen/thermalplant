@@ -4,6 +4,7 @@ from fastapi.openapi.utils import get_openapi
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+import logging
 from fastapi_health import health
 from sensors import (
     TempSensor,
@@ -11,18 +12,17 @@ from sensors import (
     RPMSensorSettings,
     AudioHandler,
     AudioHandlerSettings,
-    PipeWireRecordingLoop,  # Import the new PipeWire recording class
+    utils
 )
 import math
 import psutil
 import asyncio
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
-from log_utils import setup_queue_logging, get_logger, shutdown_logging
 
 # Setup queue-based logging system
-setup_queue_logging(level=logging.INFO)
-logger = get_logger("API")
+utils.setup_queue_logging(level=logging.INFO)
+logger = utils.get_logger("API")
 
 
 # Init API
@@ -185,7 +185,7 @@ async def shutdown_event():
             logger.warning(f"Error closing audio handler during shutdown: {e}")
     
     # Finally, shutdown logging system to ensure all pending logs are processed
-    shutdown_logging()
+    utils.shutdown_logging()
 
 
 def my_schema():
