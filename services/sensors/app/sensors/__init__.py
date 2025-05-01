@@ -11,8 +11,8 @@ from .temp import TempSensor
 from .rpm import RPMSensor, RPMSensorSettings
 from .audio import (
     AudioHandler,
-    AudioHandlerSettings,
-    PipeWireRecordingLoop,
+    AudioHandlerConfig,
+    PipewireRecordingLoop,
     AudioProcessingLoop
 )
 
@@ -22,7 +22,7 @@ __all__ = [
     'RPMSensor', 
     'RPMSensorSettings',
     'AudioHandler',
-    'AudioHandlerSettings',
-    'PipeWireRecordingLoop',
+    'AudioHandlerConfig',
+    'PipewireRecordingLoop',
     'AudioProcessingLoop'
 ]

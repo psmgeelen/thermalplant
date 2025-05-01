@@ -11,7 +11,7 @@ from sensors import (
     RPMSensor,
     RPMSensorSettings,
     AudioHandler,
-    AudioHandlerSettings,
+    AudioHandlerConfig,
     utils
 )
 import math
@@ -84,7 +84,7 @@ import time
 
 async def initialize_audio_handler():
     global audio_sensor
-    max_retries = 10
+    max_retries = 3
     retry_delay = 1  # seconds
     last_exception = None
 
@@ -102,9 +102,10 @@ async def initialize_audio_handler():
             audio_sensor = AudioHandler(
                 rate=AUDIO_RATE,
                 channels=AUDIO_CHANNELS,
-                sample_duration=audio_settings.sample_duration,
+                # sample_duration=audio_settings.sample_duration,
                 mfcc_count=audio_settings.mfcc_count,
                 buffer_size=audio_settings.buffer_size,
+                device_index=72
             )
             
             # If we got here without exception, initialization succeeded
@@ -339,11 +340,11 @@ async def get_mfcc(
     summary="Get audio handler settings",
     description="Returns the current configuration settings for the audio handler",
     response_description="Dictionary containing the audio handler settings",
-    response_model=AudioHandlerSettings,
+    response_model=AudioHandlerConfig,
 )
 @limiter.limit("100/minute")
 async def get_audio_settings(request: Request):
-    return AudioHandlerSettings(
+    return AudioHandlerConfig(
         sample_duration=audio_settings.sample_duration,
         mfcc_count=audio_settings.mfcc_count,
         buffer_size=audio_settings.buffer_size
@@ -355,10 +356,10 @@ async def get_audio_settings(request: Request):
     summary="Update audio handler settings",
     description="Update the configuration settings for the audio handler and reinitialize it",
     response_description="Dictionary containing the updated audio handler settings",
-    response_model=AudioHandlerSettings,
+    response_model=AudioHandlerConfig,
 )
 @limiter.limit("20/minute")
-async def update_audio_settings(request: Request, settings: AudioHandlerSettings):
+async def update_audio_settings(request: Request, settings: AudioHandlerConfig):
     try:
         # Update the global settings
         global audio_settings
