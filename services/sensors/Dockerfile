@@ -22,11 +22,6 @@ RUN apt update && apt install -y \
         pipewire pipewire-audio-client-libraries libspa-0.2-modules pipewire-bin
 
 
-## AI Assistant
-
-
-
-    
 RUN poetry install --without dev --no-root
 
 # Copy application code after dependencies are installed

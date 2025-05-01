@@ -21,8 +21,8 @@ class AudioHandlerSettings(BaseModel):
 class IntegratedAudioProcessor:
     """Combined audio recording and processing system"""
     
-    def __init__(self, rate: int = 44100, channels: int = 1,
-                 device_name: str = "default", mfcc_count: int = 13,
+    def __init__(self, rate: float = 44100, channels: int = 1,
+                 device_name: str = "USB", mfcc_count: int = 13,
                  buffer_size: int = 3, n_fft: int = 2048):
         self.logger = get_logger(__name__)
         self.rate = rate
@@ -77,6 +77,7 @@ class IntegratedAudioProcessor:
             device_info = self.pa.get_device_info_by_index(i)
             if (self.device_name in device_info['name'] and 
                 device_info['maxInputChannels'] > 0):
+                self.logger.info(f"found match with: {device_info}")
                 device_index = i
                 break
 

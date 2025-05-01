@@ -48,7 +48,7 @@ class HealthCheckResponse(BaseModel):
 
 # Fixed sensor parameters
 GPIO_PIN = 22
-AUDIO_RATE = 32767
+AUDIO_RATE = 44100
 AUDIO_CHANNELS = 1
 
 # Configurable sensor parameters with defaults
