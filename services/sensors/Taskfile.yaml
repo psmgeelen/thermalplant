@@ -2,9 +2,11 @@ version: 3
 
 tasks:
   default:
+    desc: Listing all available tasks
     cmds:
       - task --list-all
   test:
+    desc: Run all pytests
     cmds:
       - task: _install_poetry_deps
       - task: _test_rpm

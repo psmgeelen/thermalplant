@@ -669,8 +669,8 @@ class AudioHandler:
                             matches.append(device_info)
                             logger.info(f"Using default source as fallback: {device_info}")
                             break
-        except Exception as e:
-            logger.error(f"Error finding audio devices with PipeWire: {e}")
+                        except Exception as e:
+                        logger.error(f"Error finding audio devices with PipeWire: {e}")
         # As a last resort, if we can't find devices through PipeWire, try to return a default device
         matches.append({"index": 0, "name": "default", "maxInputChannels": 1, "defaultSampleRate": 44100})
 
