@@ -946,6 +946,31 @@ dev = ["abi3audit", "black (==24.10.0)", "check-manifest", "coverage", "packagin
 test = ["pytest", "pytest-xdist", "setuptools"]
 
 [[package]]
+name = "pulsectl"
+version = "24.11.0"
+description = "Python high-level interface and ctypes-based bindings for PulseAudio (libpulse)"
+optional = false
+python-versions = "*"
+files = [
+    {file = "pulsectl-24.11.0-py2.py3-none-any.whl", hash = "sha256:7d49641656c88e897492092d1940276e9e83351b3f1a75ee2d02ebc45bb89228"},
+    {file = "pulsectl-24.11.0.tar.gz", hash = "sha256:0ba32745d3f198d5657af19f7ee3eb007af5a86a306ec3cd45af42e767820d0d"},
+]
+
+[[package]]
+name = "pulsectl-asyncio"
+version = "1.2.2"
+description = "Asyncio frontend for the pulsectl Python bindings of libpulse"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "pulsectl_asyncio-1.2.2-py3-none-any.whl", hash = "sha256:21c47bcba63e01fe25e2326d73c85952e1aa59174bc51fe4f96bd1ffcc3a6850"},
+    {file = "pulsectl_asyncio-1.2.2.tar.gz", hash = "sha256:ee4c427a10f44d2e38065e480668a47316b5d93612ebe3d05d9318f0fe0d417f"},
+]
+
+[package.dependencies]
+pulsectl = ">=23.5.0,<=24.11.0"
+
+[[package]]
 name = "pyaudio"
 version = "0.2.14"
 description = "Cross-platform audio I/O with PortAudio"
@@ -1833,4 +1858,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "af56035a8e86f1c9cd6f799b5ad3a34787f317ee761499ffa7a9b49002ca10c3"
+content-hash = "cd07b375bad295dd266c519be9eee4a68dee41a1e2e61166de9084505e9416f3"

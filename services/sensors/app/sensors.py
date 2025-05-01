@@ -6,10 +6,12 @@ import logging
 import threading
 from typing import Optional
 import numpy as np
-import pyaudio
 import librosa
 from gpiozero.pins.lgpio import LGPIOFactory
 from pydantic import BaseModel, Field, validator
+import pulsectl
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger("sensors-backend")
 # Force gpiozero to use RPi.GPIO as the pin factory
@@ -182,33 +184,47 @@ class RPMSensor(object):
         return rpm
 
 
-class RecordingLoop:
+import asyncio
+import pulsectl
+import sys
+import json
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+
+class PipeWireRecordingLoop:
     def __init__(
         self, device_index: int, rate: int, channels: int, chunk_size: int = 1024
     ):
         self.device_index = device_index
+        self.device_name = None  # Will be set when finding the device
         self.rate = rate
         self.channels = channels
         self.chunk_size = chunk_size
         self.running = False
         self.thread = None
         self.audio_buffer = deque(maxlen=10)
-        self.pyaudio_instance = None
         self.stream = None
         self.sample_ready = threading.Event()
+        self.pulse = None  # Will hold PipeWire/PulseAudio client
+        self.async_loop = None  # Will hold asyncio event loop
+        
         # Watchdog variables
         self.last_sample_time = 0
         self.max_silence_duration = 5.0  # seconds without data before watchdog triggers
         self.watchdog_thread = None
         self.watchdog_running = False
+        
+        # Thread pool for async operations
+        self.executor = ThreadPoolExecutor(max_workers=2)
 
     def start(self, sample_duration: float = 5.0):
         if self.running:
             return
 
         self.running = True
-        self.pyaudio_instance = pyaudio.PyAudio()
         self.chunks_per_sample = int((self.rate * sample_duration) / self.chunk_size)
+        
+        # Create and start the main recording thread
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         
@@ -229,50 +245,19 @@ class RecordingLoop:
                                   f"No samples for {time_since_last_sample:.1f} seconds. "
                                   f"Attempting recovery...")
                     
-                    # Try to restart the stream
-                    if self.stream:
+                    # Signal the main thread to restart
+                    if self.async_loop and self.running:
                         try:
-                            self.stream.stop_stream()
-                            self.stream.close()
+                            # Create a new client and try to recover
+                            self._cleanup_pulse_client()
+                            time.sleep(1.0)  # Brief pause before recovery
+                            
+                            # Reinitialize PipeWire
+                            self._run_in_event_loop(self._setup_pipewire)
+                            logger.info("PipeWire connection reinitialized by watchdog")
+                            self.last_sample_time = time.time()  # Reset timer after recovery
                         except Exception as e:
-                            logger.error(f"Error closing stalled stream: {str(e)}")
-                    
-                    try:
-                        # Reopen stream
-                        self.stream = self.pyaudio_instance.open(
-                            format=pyaudio.paInt16,
-                            channels=self.channels,
-                            rate=self.rate,
-                            input=True,
-                            input_device_index=self.device_index,
-                            frames_per_buffer=self.chunk_size,
-                        )
-                        logger.info("Audio stream successfully restarted by watchdog")
-                        self.last_sample_time = time.time()  # Reset timer after recovery
-                    except Exception as e:
-                        logger.error(f"Watchdog failed to restart audio stream: {str(e)}")
-                        
-                        # Try to completely reinitialize PyAudio
-                        try:
-                            if self.pyaudio_instance:
-                                self.pyaudio_instance.terminate()
-                            
-                            # Create new PyAudio instance
-                            self.pyaudio_instance = pyaudio.PyAudio()
-                            
-                            # Reopen stream with new instance
-                            self.stream = self.pyaudio_instance.open(
-                                format=pyaudio.paInt16,
-                                channels=self.channels,
-                                rate=self.rate,
-                                input=True,
-                                input_device_index=self.device_index,
-                                frames_per_buffer=self.chunk_size,
-                            )
-                            logger.info("PyAudio completely reinitialized by watchdog")
-                            self.last_sample_time = time.time()
-                        except Exception as reinit_error:
-                            logger.error(f"Watchdog failed to reinitialize PyAudio: {str(reinit_error)}")
+                            logger.error(f"Watchdog failed to reinitialize PipeWire: {str(e)}")
             except Exception as e:
                 logger.error(f"Error in audio watchdog: {str(e)}")
                 
@@ -284,71 +269,30 @@ class RecordingLoop:
         retry_delay = 1.0
         retry_count = 0
         
+        # Create an event loop for this thread
+        self.async_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.async_loop)
+        
         while self.running:
             try:
-                # Initialize the audio stream
-                logger.info(f"Initializing audio stream (attempt {retry_count + 1})")
-                self.stream = self.pyaudio_instance.open(
-                    format=pyaudio.paInt16,
-                    channels=self.channels,
-                    rate=self.rate,
-                    input=True,
-                    input_device_index=self.device_index,
-                    frames_per_buffer=self.chunk_size,
-                )
-    
+                # Initialize PipeWire connection
+                logger.info(f"Initializing PipeWire connection (attempt {retry_count + 1})")
+                self._run_in_event_loop(self._setup_pipewire)
+                
                 # Reset retry count after successful initialization
                 retry_count = 0
                 
                 # Update last sample time
                 self.last_sample_time = time.time()
                 
-                # Collect initial sample
-                if not self._collect_one_sample():
-                    logger.warning("Failed to collect initial audio sample, retrying...")
-                    continue
-    
-                # Main recording loop
-                consecutive_failures = 0
-                while self.running:
-                    try:
-                        if self._collect_one_sample():
-                            # Reset failure counter on success
-                            consecutive_failures = 0
-                        else:
-                            consecutive_failures += 1
-                            logger.warning(f"Failed to collect audio sample ({consecutive_failures} consecutive failures)")
-                            
-                            # If too many consecutive failures, restart the stream
-                            if consecutive_failures >= 3:
-                                logger.warning("Too many consecutive collection failures, restarting stream")
-                                break
-                                
-                        time.sleep(0.01)  # Prevent CPU overuse
-                    except Exception as e:
-                        logger.error(f"Error during audio collection: {str(e)}")
-                        consecutive_failures += 1
-                        
-                        # Break loop to restart stream after too many errors
-                        if consecutive_failures >= 3:
-                            logger.warning("Too many consecutive errors, restarting stream")
-                            break
-                            
-                        # Brief pause after error
-                        time.sleep(0.5)
+                # Start the recording process
+                self._run_in_event_loop(self._record_audio)
                 
-                # If we reach here, the inner loop broke - clean up the stream
-                if self.stream:
-                    try:
-                        self.stream.stop_stream()
-                        self.stream.close()
-                        self.stream = None
-                    except Exception as close_error:
-                        logger.error(f"Error closing stream: {str(close_error)}")
-                        self.stream = None
+                # If we reach here, the recording has stopped - wait before retrying
+                time.sleep(1.0)
                 
-            except Exception as outer_error:
-                logger.error(f"Critical error in recording loop: {str(outer_error)}")
+            except Exception as e:
+                logger.error(f"Critical error in recording loop: {str(e)}")
                 retry_count += 1
                 
                 # If too many retries, give up
@@ -364,54 +308,203 @@ class RecordingLoop:
                 retry_delay = min(retry_delay * 1.5, 10.0)
                 
                 # Release existing resources before retry
-                self._cleanup()
+                self._cleanup_pulse_client()
                 
-                # Try to reinitialize PyAudio on major failures
-                if retry_count > 1 and self.pyaudio_instance:
-                    try:
-                        self.pyaudio_instance.terminate()
-                        time.sleep(1.0)  # Give system time to release audio resources
-                        self.pyaudio_instance = pyaudio.PyAudio()
-                        logger.info("PyAudio reinitialized after failure")
-                    except Exception as pa_error:
-                        logger.error(f"Failed to reinitialize PyAudio: {str(pa_error)}")
+                # Give system time to release audio resources
+                time.sleep(1.0)
         
         # Final cleanup when loop ends
-        self._cleanup()
+        self._cleanup_pulse_client()
+        
+        # Close event loop
+        if self.async_loop:
+            self.async_loop.close()
+            self.async_loop = None
 
-    def _collect_one_sample(self):
-        frames = []
-        for _ in range(self.chunks_per_sample):
-            if not self.running:
-                break
-            try:
-                data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                frames.append(data)
-            except (IOError, OSError) as e:
-                # Handle common audio stream errors
-                logger.error(f"Error reading from audio stream: {str(e)}")
-                # Break the loop to trigger recovery
-                break
-    
-        if frames and self.running:
-            audio_data = b"".join(frames)
-            logger.info(f"Adding audio chunk..")
-            self.audio_buffer.append(audio_data)
+    def _run_in_event_loop(self, func):
+        """Helper to run async functions in the event loop"""
+        if not self.async_loop:
+            raise RuntimeError("Event loop is not initialized")
+        
+        future = asyncio.run_coroutine_threadsafe(func(), self.async_loop)
+        return future.result()
+
+    async def _setup_pipewire(self):
+        """Initialize PipeWire connection and find appropriate source"""
+        try:
+            # Create a new pulse client
+            self.pulse = pulsectl.Pulse('audio-recorder')
+            
+            # Get available sources
+            sources = self.pulse.source_list()
+            
+            # Find appropriate source based on the device index or name
+            source = None
+            
+            if self.device_name:
+                # Try to find by name first if we have it from previous initialization
+                for s in sources:
+                    if self.device_name in s.name:
+                        source = s
+                        break
+            
+            # If not found by name, use the index
+            if not source:
+                if 0 <= self.device_index < len(sources):
+                    source = sources[self.device_index]
+                    self.device_name = source.name  # Remember the name for future recovery
+                else:
+                    # Fall back to default source if index is out of range
+                    server_info = self.pulse.server_info()
+                    default_source_name = server_info.default_source_name
+                    for s in sources:
+                        if s.name == default_source_name:
+                            source = s
+                            self.device_name = source.name
+                            break
+            
+            if not source:
+                # As a last resort, try to find any USB Audio source
+                for s in sources:
+                    if "USB Audio" in s.name:
+                        source = s
+                        self.device_name = source.name
+                        break
+                        
+            if not source:
+                # If still no source found, use the first available source
+                if sources:
+                    source = sources[0]
+                    self.device_name = source.name
+            
+            if not source:
+                raise RuntimeError("No suitable audio source found")
+                
+            logger.info(f"Selected audio source: {source.name}")
+            return source
+            
+        except Exception as e:
+            logger.error(f"Failed to setup PipeWire: {str(e)}")
+            self._cleanup_pulse_client()
+            raise
+
+    async def _record_audio(self):
+        """Record audio data from the selected PipeWire source"""
+        source = await self._setup_pipewire()
+        
+        try:
+            # Create a recording stream
+            self.stream = self.pulse.stream_monitor_source_by_source_name(source.name)
+            stream_id = self.stream.index
+            logger.info(f"Started recording from source: {source.name} (stream ID: {stream_id})")
+            
+            last_data_time = time.time()
+            consecutive_failures = 0
+            frames = []
+            frame_count = 0
+            
+            # Main recording loop
+            while self.running:
+                try:
+                    # Read from the stream - this is blocking but with a timeout
+                    data = self.pulse.read(stream_id, self.chunk_size)
+                    
+                    if data and len(data) > 0:
+                        # Reset failure counter on success
+                        consecutive_failures = 0
+                        frames.append(data)
+                        frame_count += 1
+                        last_data_time = time.time()
+                        
+                        # If we've collected enough frames for a sample
+                        if frame_count >= self.chunks_per_sample:
+                            # Process the collected frames
+                            self._process_frames(frames)
+                            frames = []
+                            frame_count = 0
+                    else:
+                        # No data received
+                        consecutive_failures += 1
+                        if consecutive_failures >= 5:
+                            logger.warning(f"No audio data received for {time.time() - last_data_time:.1f} seconds")
+                            consecutive_failures = 0
+                            
+                        # Check if we've been silent too long
+                        if time.time() - last_data_time > 2.0:
+                            logger.warning("Audio stream appears to be silent, checking connection...")
+                            # Try to poke the connection to see if it's still alive
+                            try:
+                                self.pulse.source_info(source.name)
+                                logger.info("Connection still alive, continuing to listen")
+                                last_data_time = time.time()  # Reset the timer
+                            except Exception as e:
+                                logger.error(f"Source no longer available: {e}")
+                                break  # Exit the loop to trigger a reconnection
+                    
+                    # Brief pause to prevent CPU overuse
+                    await asyncio.sleep(0.01)
+                    
+                except Exception as e:
+                    logger.error(f"Error during audio recording: {str(e)}")
+                    consecutive_failures += 1
+                    
+                    # Break loop after too many errors to trigger reconnection
+                    if consecutive_failures >= 3:
+                        logger.warning("Too many consecutive errors, restarting stream")
+                        break
+                        
+                    # Brief pause after error
+                    await asyncio.sleep(0.5)
+                    
+        except Exception as e:
+            logger.error(f"Error setting up recording: {str(e)}")
+        finally:
+            # Clean up the stream
+            if self.stream:
+                try:
+                    self.pulse.stream_delete(self.stream.index)
+                    self.stream = None
+                except Exception as e:
+                    logger.error(f"Error closing PipeWire stream: {str(e)}")
+
+    def _process_frames(self, frames):
+        """Process collected audio frames into a sample"""
+        if not frames:
+            return False
+            
+        try:
+            # Convert frames to numpy array
+            raw_audio = b''.join(frames)
+            
+            # Add to buffer
+            logger.info(f"Adding audio chunk of {len(raw_audio)} bytes")
+            self.audio_buffer.append(raw_audio)
             self.sample_ready.set()
             self.sample_ready.clear()
+            
             # Update last sample time for watchdog
             self.last_sample_time = time.time()
             return True
-        return False
+        except Exception as e:
+            logger.error(f"Error processing audio frames: {str(e)}")
+            return False
 
-    def _cleanup(self):#
-        if self.stream:
+    def _cleanup_pulse_client(self):
+        """Clean up PipeWire/PulseAudio client and resources"""
+        if self.pulse:
             try:
-                self.stream.stop_stream()
-                self.stream.close()
-                self.stream = None
+                if self.stream:
+                    try:
+                        self.pulse.stream_delete(self.stream.index)
+                    except:
+                        pass
+                    self.stream = None
+                    
+                self.pulse.close()
             except Exception as e:
-                logger.warning(f"Error while cleaning up audio stream: {str(e)}")
+                logger.warning(f"Error cleaning up PipeWire client: {str(e)}")
+            finally:
+                self.pulse = None
 
     def stop(self):
         if not self.running:
@@ -430,11 +523,12 @@ class RecordingLoop:
             self.watchdog_thread.join(timeout=2)
             self.watchdog_thread = None
 
-        self._cleanup()
-
-        if self.pyaudio_instance:
-            self.pyaudio_instance.terminate()
-            self.pyaudio_instance = None
+        # Clean up PipeWire resources
+        self._cleanup_pulse_client()
+        
+        # Clean up thread pool
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
 
     def get_audio_data(self) -> Optional[bytes]:
         if self.audio_buffer:
@@ -629,7 +723,7 @@ class AudioHandler:
         self.data_ready_event = threading.Event()
         self.running = True
 
-        # Find audio device
+        # Find audio device using PipeWire/PulseAudio
         matches = self._find_audio_device()
         if len(matches) == 0:
             raise RuntimeError("No audio device available")
@@ -639,32 +733,69 @@ class AudioHandler:
 
     def _find_audio_device(self, match_on: str = "USB Audio") -> list:
         matches = []
-        p = pyaudio.PyAudio()
-
-        for i in range(p.get_device_count()):
-            info = p.get_device_info_by_index(i)
-            logging.info(f"Found audio devices: {info}")
-            if match_on in info["name"] and info["maxInputChannels"] == 1:
-                matches.append(info)
-                logging.info(f"Found a match!: {info}")
+        try:
+            # Use pulsectl (PipeWire's PulseAudio compatibility layer) to find devices
+            with pulsectl.Pulse('device-finder') as pulse:
+                sources = pulse.source_list()
+                
+                # Log all sources for debugging
+                for i, source in enumerate(sources):
+                    device_info = {
+                        "index": i,
+                        "name": source.name,
+                        "description": source.description,
+                        "maxInputChannels": source.channel_count
+                    }
+                    logging.info(f"Found audio device: {device_info}")
+                    
+                    # Match based on name or description
+                    if (match_on.lower() in source.name.lower() or 
+                        match_on.lower() in source.description.lower()):
+                        matches.append(device_info)
+                        logging.info(f"Found a match!: {device_info}")
+                
+                # If no matches found, add default source
+                if not matches and sources:
+                    server_info = pulse.server_info()
+                    default_source_name = server_info.default_source_name
+                    for i, source in enumerate(sources):
+                        if source.name == default_source_name:
+                            device_info = {
+                                "index": i,
+                                "name": source.name,
+                                "description": source.description,
+                                "maxInputChannels": source.channel_count
+                            }
+                            matches.append(device_info)
+                            logging.info(f"Using default source as fallback: {device_info}")
+                            break
+        except Exception as e:
+            logging.error(f"Error finding audio devices with PipeWire: {e}")
+            # As a last resort, if we can't find devices through PipeWire, try to return a default device
+            matches.append({"index": 0, "name": "default", "maxInputChannels": 1})
+            
         return matches
 
     def _initialize_audio_components(self):
-        # Create and start recording loop
-        self.recording_loop = RecordingLoop(
+        # Create and start recording loop with PipeWire
+        logger.info(f"Initializing PipeWire recording loop with device index {self.device_index}")
+        self.recording_loop = PipeWireRecordingLoop(
             device_index=self.device_index,
             rate=self.rate,
             channels=self.channels,
             chunk_size=1024,
         )
         self.recording_loop.start(sample_duration=self.sample_duration)
-
+    
         try:
             # Wait for first audio sample
-            if not self.recording_loop.wait_for_data(timeout=10):
+            logger.info("Waiting for initial audio sample...")
+            if not self.recording_loop.wait_for_data(timeout=15):  # Increased timeout for PipeWire initialization
                 self.recording_loop.stop()
-                raise RuntimeError("Could not record initial audio sample")
-        
+                raise RuntimeError("Could not record initial audio sample from PipeWire")
+            
+            logger.info("Initial audio sample received, starting processing loop")
+            
             # Create and start processing loop
             self.processing_loop = ProcessingLoop(
                 rate=self.rate, mfcc_count=self.mfcc_count, n_fft=2048
@@ -676,10 +807,13 @@ class AudioHandler:
             self.spectrum_buffer = deque(maxlen=self.buffer_size)
         
             # Wait for initial processing
+            logger.info("Waiting for initial audio processing...")
             if not self.processing_loop.wait_for_processing(timeout=20):
                 self.recording_loop.stop()
                 self.processing_loop.stop()
                 raise RuntimeError("Could not process initial audio sample")
+                
+            logger.info("Audio components successfully initialized with PipeWire")
         except Exception as e:
             # Clean up any initialized components before re-raising
             if hasattr(self, 'recording_loop'):
@@ -958,8 +1092,8 @@ class AudioHandler:
                 logger.error("No audio device found during recovery")
                 return
             
-            # Reinitialize recording loop
-            self.recording_loop = RecordingLoop(
+            # Reinitialize recording loop with PipeWire
+            self.recording_loop = PipeWireRecordingLoop(
                 device_index=self.device_index,
                 rate=self.rate,
                 channels=self.channels,
@@ -968,7 +1102,7 @@ class AudioHandler:
             self.recording_loop.start(sample_duration=self.sample_duration)
             
             # Wait for first audio sample
-            if not self.recording_loop.wait_for_data(timeout=5):
+            if not self.recording_loop.wait_for_data(timeout=10):  # Increased timeout for PipeWire
                 logger.error("Could not record audio during recovery")
                 return
                 
@@ -979,7 +1113,7 @@ class AudioHandler:
             self.processing_loop.start(self.recording_loop.get_audio_data)
             
             # Wait for initial processing
-            if not self.processing_loop.wait_for_processing(timeout=5):
+            if not self.processing_loop.wait_for_processing(timeout=10):  # Increased timeout for processing
                 logger.error("Could not process audio during recovery")
                 return
                 

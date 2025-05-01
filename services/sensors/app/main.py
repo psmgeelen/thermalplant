@@ -11,6 +11,7 @@ from sensors import (
     RPMSensorSettings,
     AudioHandler,
     AudioHandlerSettings,
+    PipeWireRecordingLoop,  # Import the new PipeWire recording class
 )
 import logging
 import math
@@ -656,6 +657,18 @@ async def _healthcheck_audio_sensor():
         # Try to use the sensor directly without the dependency that would raise an exception
         audio_sensor_instance = audio_sensor
             
+        # Check if recording_loop is running and has PipeWire connection
+        if (not hasattr(audio_sensor_instance, 'recording_loop') or 
+            not audio_sensor_instance.recording_loop or 
+            not audio_sensor_instance.recording_loop.running):
+            return {
+                "status": "warning",
+                "details": {
+                    "message": "PipeWire recording loop is not running",
+                    "recommendation": "Restart the audio subsystem"
+                }
+            }
+            
         # Check if we can get MFCC data (acoustic features)
         mfcc_data = audio_sensor_instance.read_mfcc()
 
@@ -675,7 +688,8 @@ async def _healthcheck_audio_sensor():
                 "status": "ok",
                 "details": {
                     "mfcc_features": len(mfcc_data),
-                    "spectrum_bands": len(spectrum_data)
+                    "spectrum_bands": len(spectrum_data),
+                    "audio_backend": "PipeWire"
                 }
             }
         else:
@@ -685,7 +699,8 @@ async def _healthcheck_audio_sensor():
                 "details": {
                     "message": "Audio sensor not returning valid data",
                     "mfcc_valid": bool(mfcc_data and isinstance(mfcc_data, dict) and len(mfcc_data) > 0),
-                    "spectrum_valid": bool(spectrum_data and isinstance(spectrum_data, dict) and len(spectrum_data) > 0)
+                    "spectrum_valid": bool(spectrum_data and isinstance(spectrum_data, dict) and len(spectrum_data) > 0),
+                    "audio_backend": "PipeWire"
                 }
             }
     except Exception as e:
@@ -694,7 +709,8 @@ async def _healthcheck_audio_sensor():
             "status": "warning",  # Use warning instead of error to allow overall health check to pass
             "details": {
                 "message": f"Audio sensor check failed: {str(e)}",
-                "recommendation": "Audio functionality is optional; system can operate without it"
+                "recommendation": "Audio functionality is optional; system can operate without it",
+                "audio_backend": "PipeWire"
             }
         }
 
