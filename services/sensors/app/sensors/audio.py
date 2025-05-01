@@ -4,9 +4,14 @@ import librosa
 import logging
 import time
 from typing import Dict, Any, Optional, List
-import pulsectl_asyncio
 from pydantic import BaseModel, Field, validator
 from .utils import get_logger
+import pulsectl
+import threading
+from queue import Queue
+import pulsectl
+import numpy as np
+import time
 
 
 class AsyncComponent:
@@ -44,6 +49,8 @@ class AsyncComponent:
         raise NotImplementedError()
 
 
+
+
 class PipewireRecordingLoop(AsyncComponent):
     """Handles audio recording using PipeWire/PulseAudio"""
 
@@ -59,53 +66,69 @@ class PipewireRecordingLoop(AsyncComponent):
     async def _run(self):
         """Main recording loop"""
         try:
-            async with pulsectl_asyncio.PulseAsync('audio-recorder') as self.pulse:
-                while self.running:
-                    try:
-                        await self._setup_recording()
-                        await self._record_loop()
-                    except Exception as e:
-                        self.logger.error(f"Recording error: {e}")
-                        await asyncio.sleep(1)
+            self.pulse = pulsectl.Pulse('audio-recorder')
+            await self._setup_recording()
+            await self._record_loop()
         except Exception as e:
             self.logger.error(f"Fatal recording error: {e}")
+        finally:
+            if self.pulse:
+                self.pulse.close()
 
     async def _setup_recording(self):
         """Setup PipeWire recording stream"""
         if not self.pulse:
             raise RuntimeError("PulseAudio client not initialized")
 
-        sources = await self.pulse.source_list()
+        sources = self.pulse.source_list()
         self.logger.info(f"Found the following devices: {sources}")
-        
+
         match = []
         for source in sources:
             if self.device_name in source.name:
                 match.append(source)
-        
+
         self.logger.info(f"Found following matches for device name: {match}")
-        
+
         if len(match) == 0:
             raise RuntimeError(f"Audio device {self.device_name} not found")
 
-        self.stream = await self.pulse.stream_create(
+        # Create the recording stream
+        self.stream = self.pulse.stream_new(
             name="audio-recorder",
-            rate=self.rate,
-            channels=self.channels,
-            format="s16le",
-            source=match[0].name
+            samplespec=f's16le {self.rate} {self.channels}'
+        )
+
+        # Connect the stream to the source
+        self.pulse.stream_connect_record(
+            self.stream,
+            match[0].index
         )
 
     async def _record_loop(self):
         """Record audio data and put it in the queue"""
         chunk_size = int(self.rate)  # 1 second chunks
+
         while self.running:
             try:
-                data = await self.pulse.stream_read(self.stream, chunk_size)
+                # Read data from the stream
+                data = self.pulse.stream_read(self.stream, chunk_size)
                 await self.audio_queue.put(data)
             except Exception as e:
                 self.logger.error(f"Recording error: {e}")
-                break
+                await asyncio.sleep(1)
+
+    async def stop(self):
+        """Stop the recording loop and cleanup"""
+        if self.stream:
+            try:
+                self.pulse.stream_disconnect(self.stream)
+            except:
+                pass
+        if self.pulse:
+            self.pulse.close()
+        await super().stop()
+
 
 
 class AudioProcessingLoop(AsyncComponent):
