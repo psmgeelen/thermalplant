@@ -12,8 +12,7 @@ from .rpm import RPMSensor, RPMSensorSettings
 from .audio import (
     AudioHandler,
     AudioHandlerSettings,
-    PipewireRecordingLoop,
-    AudioProcessingLoop
+    IntegratedAudioProcessor,
 )
 
 # Define public API for package
@@ -23,6 +22,5 @@ __all__ = [
     'RPMSensorSettings',
     'AudioHandler',
     'AudioHandlerSettings',
-    'PipewireRecordingLoop',
-    'AudioProcessingLoop'
+    'IntegratedAudioProcessor',
 ]

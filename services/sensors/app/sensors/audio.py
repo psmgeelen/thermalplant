@@ -1,203 +1,146 @@
+from collections import deque
 import asyncio
 import numpy as np
 import librosa
-import logging
-import time
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field, validator
-from .utils import get_logger
-import numpy as np
-import time
 import pyaudio
 import pulsectl
-import numpy as np
-from typing import Optional, Dict
+import logging
+import time
+from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field
+from .utils import get_logger
 
 
-class AsyncComponent:
-    """Base class for async components with lifecycle management and logging"""
-
-    def __init__(self, name: str, logger: logging.Logger):
-        self.name = name
-        self.logger = logger
-        self.running = False
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event = asyncio.Event()
-
-    async def start(self):
-        """Start the async component"""
-        if self.running:
-            return
-        self.running = True
-        self._stop_event.clear()
-        self._task = asyncio.create_task(self._run())
-        self.logger.info(f"{self.name} started")
-
-    async def stop(self):
-        """Stop the async component gracefully"""
-        if not self.running:
-            return
-        self.running = False
-        self._stop_event.set()
-        if self._task:
-            await self._task
-            self._task = None
-        self.logger.info(f"{self.name} stopped")
-
-    async def _run(self):
-        """Main execution loop to be implemented by subclasses"""
-        raise NotImplementedError()
+class AudioHandlerSettings(BaseModel):
+    """Configuration settings for AudioHandler"""
+    sample_duration: float = Field(..., gt=0, description="Duration of audio sample in seconds")
+    mfcc_count: int = Field(..., gt=0, description="Number of MFCC coefficients to extract")
+    buffer_size: int = Field(..., gt=0, description="Size of audio buffer")
 
 
-
-class PipewireRecordingLoop(AsyncComponent):
-    """Handles audio recording using PyAudio with PulseAudio/Pipewire device detection"""
-
-    def __init__(self, device_name: str = "USB Audio Device", rate: int = 44100, channels: int = 1):
-        super().__init__("PipewireRecordingLoop", get_logger(__name__))
+class IntegratedAudioProcessor:
+    """Combined audio recording and processing system"""
+    
+    def __init__(self, rate: int = 44100, channels: int = 1,
+                 device_name: str = "default", mfcc_count: int = 13,
+                 buffer_size: int = 3, n_fft: int = 2048):
+        self.logger = get_logger(__name__)
+        self.rate = rate
+        self.channels = channels
         self.device_name = device_name
-        self.rate = rate
-        self.channels = channels  # We want mono
-        self.audio_queue = asyncio.Queue(maxsize=10)
-        self.pulse = None
-        self.pa = None
-        self.stream = None
-        self.device_index = None
-        self.chunk_size = int(self.rate)  # 1 second chunks
-
-    async def _setup_recording(self):
-        """Setup recording by finding the correct device and initializing PyAudio stream"""
-        if not self.pulse:
-            raise RuntimeError("PulseAudio client not initialized")
-
-        # Get PulseAudio sources
-        sources = self.pulse.source_list()
-        self.logger.info(f"Found the following PulseAudio sources: {sources}")
-
-        # First, look for the mono input device
-        pulse_source = None
-        for source in sources:
-            # Look specifically for USB Audio Device that's mono
-            if (self.device_name in source.name and 
-                'mono' in source.name.lower() and 
-                source.channels == 1):
-                pulse_source = source
-                self.logger.info(f"Found matching mono source: {source}")
-                break
-        
-        # If no mono device found, try to find any matching device
-        if not pulse_source:
-            for source in sources:
-                if self.device_name in source.name:
-                    pulse_source = source
-                    self.logger.info(f"Found matching source (non-mono): {source}")
-                    self.logger.warning("Using non-mono device, audio will be downmixed to mono")
-                    break
-
-        if not pulse_source:
-            raise RuntimeError(f"Audio device containing '{self.device_name}' not found")
-
-        # Store the actual number of channels from the source
-        source_channels = pulse_source.channels
-        self.logger.info(f"Source has {source_channels} channels, will {'downmix to' if source_channels > 1 else 'use as'} mono")
-
-        # Find PyAudio device index
-        device_count = self.pa.get_device_count()
-        for i in range(device_count):
-            device_info = self.pa.get_device_info_by_index(i)
-            self.logger.info(f"Checking device {i}: {device_info}")
-            # Match by name and input capability
-            if (pulse_source.name in device_info.get('name', '') and 
-                device_info.get('maxInputChannels', 0) > 0):
-                self.device_index = i
-                break
-
-        if self.device_index is None:
-            raise RuntimeError(f"Could not find PyAudio device for {pulse_source.name}")
-
-        # Create PyAudio stream
-        self.stream = self.pa.open(
-            format=pyaudio.paInt16,
-            channels=source_channels,  # Use source channels
-            rate=self.rate,
-            input=True,
-            input_device_index=self.device_index,
-            frames_per_buffer=self.chunk_size
-        )
-
-        self.logger.info("Stream opened successfully")
-
-        # Try to move the PyAudio stream to the correct PulseAudio source
-        try:
-            source_outputs = self.pulse.source_output_list()
-            for output in source_outputs:
-                if 'PyAudio' in output.name:
-                    self.logger.info(f"Moving PyAudio output to source: {pulse_source.name}")
-                    self.pulse.source_output_move(output.index, pulse_source.index)
-                    break
-        except Exception as e:
-            self.logger.warning(f"Could not set PulseAudio source: {e}")
-
-        self.logger.info("Recording setup completed successfully")
-
-class AudioProcessingLoop(AsyncComponent):
-    """Handles audio processing into MFCC and spectrum features"""
-
-    def __init__(self, rate: int, mfcc_count: int, n_fft: int = 2048):
-        super().__init__("AudioProcessingLoop", get_logger(__name__))
-        self.rate = rate
         self.mfcc_count = mfcc_count
         self.n_fft = n_fft
-        self.results_queue = asyncio.Queue(maxsize=3)
-        self.audio_queue = None
+        
+        # Buffers
+        self.raw_buffer = deque(maxlen=buffer_size)
+        self.features_buffer = deque(maxlen=buffer_size)
+        
+        # Audio handling
+        self.chunk_size = int(rate)  # 1-second chunks
+        self.pa = None
+        self.pulse = None
+        self.stream = None
+        
+        # State
+        self.running = False
+        self._processing_task = None
 
-    async def _run(self):
-        """Main processing loop"""
-        if not self.audio_queue:
-            raise RuntimeError("Audio queue not set")
+    async def start(self):
+        """Initialize and start audio processing"""
+        try:
+            # Initialize audio
+            self.pulse = pulsectl.Pulse('device-detector')
+            self.pa = pyaudio.PyAudio()
+            
+            # Find and set up device
+            await self._setup_audio_device()
+            
+            self.running = True
+            self._processing_task = asyncio.create_task(self._process_loop())
+            self.logger.info("Audio processor started")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start audio processor: {e}")
+            await self.stop()
+            raise
 
+    async def _setup_audio_device(self):
+        """Set up audio device and stream"""
+        sources = self.pulse.source_list()
+        self.logger.info("Available audio sources:")
+        for source in sources:
+            self.logger.info(f"  - {source.name}")
+
+        # Try to find specified device
+        device_index = None
+        for i in range(self.pa.get_device_count()):
+            device_info = self.pa.get_device_info_by_index(i)
+            if (self.device_name in device_info['name'] and 
+                device_info['maxInputChannels'] > 0):
+                device_index = i
+                break
+
+        if device_index is None:
+            self.logger.warning(f"Device '{self.device_name}' not found, using default")
+            device_index = self.pa.get_default_input_device_info()['index']
+
+        self.stream = self.pa.open(
+            format=pyaudio.paFloat32,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            input_device_index=device_index,
+            frames_per_buffer=self.chunk_size,
+            stream_callback=self._audio_callback
+        )
+        
+        self.logger.info(f"Audio stream opened: device_index={device_index}, "
+                        f"rate={self.rate}, channels={self.channels}")
+
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """Handle incoming audio data"""
+        if status:
+            self.logger.warning(f"Audio callback status: {status}")
+        
+        if self.running:
+            try:
+                audio_data = np.frombuffer(in_data, dtype=np.float32)
+                self.raw_buffer.append(audio_data)
+                
+                # Log audio levels
+                rms = np.sqrt(np.mean(np.square(audio_data)))
+                self.logger.debug(f"Audio RMS level: {rms:.6f}")
+                
+            except Exception as e:
+                self.logger.error(f"Error in audio callback: {e}")
+                
+        return (None, pyaudio.paContinue)
+
+    async def _process_loop(self):
+        """Process audio data from the buffer"""
         while self.running:
             try:
-                # Use wait_for to prevent indefinite blocking
-                audio_data = await asyncio.wait_for(self.audio_queue.get(), timeout=1.0)
-                if audio_data is None:
-                    continue
-
-                # Process audio data in a separate thread to not block the event loop
-                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-                
-                # Run CPU-intensive operations in a thread pool
-                mfcc = await asyncio.to_thread(self._compute_mfcc, audio_np)
-                spectrum = await asyncio.to_thread(self._compute_spectrum, audio_np)
-
-                result = {
-                    'mfcc': mfcc,
-                    'spectrum': spectrum,
-                    'timestamp': time.time()
-                }
-
-                try:
-                    await asyncio.wait_for(
-                        self.results_queue.put(result),
-                        timeout=0.1
-                    )
-                except asyncio.TimeoutError:
-                    # If queue is full, remove oldest item and try again
-                    if not self.results_queue.empty():
-                        _ = await self.results_queue.get()
-                    await self.results_queue.put(result)
-
-            except asyncio.TimeoutError:
-                # No data available, continue waiting
-                continue
+                if len(self.raw_buffer) > 0:
+                    audio_data = self.raw_buffer[-1]
+                    
+                    features = {
+                        'mfcc': await self._compute_mfcc(audio_data),
+                        'spectrum': await self._compute_spectrum(audio_data),
+                        'timestamp': time.time(),
+                        'status': 'ok'
+                    }
+                    
+                    self.features_buffer.append(features)
+                    
+                await asyncio.sleep(0.1)
+                    
             except Exception as e:
                 self.logger.error(f"Processing error: {e}")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-    def _compute_mfcc(self, audio_np: np.ndarray) -> Dict[str, float]:
+    async def _compute_mfcc(self, audio_np: np.ndarray) -> Dict[str, float]:
         """Compute MFCC features"""
         try:
-            audio_np = audio_np / np.iinfo(np.int16).max
             mfccs = librosa.feature.mfcc(
                 y=audio_np,
                 sr=self.rate,
@@ -219,10 +162,9 @@ class AudioProcessingLoop(AsyncComponent):
             self.logger.error(f"MFCC computation error: {e}")
             return {}
 
-    def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
+    async def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
         """Compute frequency spectrum"""
         try:
-            audio_np = audio_np / np.iinfo(np.int16).max
             D = librosa.stft(audio_np, n_fft=self.n_fft)
             spectrum = np.abs(D)
             spectrum_db = librosa.amplitude_to_db(spectrum, ref=np.max)
@@ -237,9 +179,52 @@ class AudioProcessingLoop(AsyncComponent):
             self.logger.error(f"Spectrum computation error: {e}")
             return {}
 
-class AudioHandler:
-    """Main audio processing handler"""
+    def get_latest_features(self) -> Dict[str, Any]:
+        """Get the most recent processed features"""
+        if len(self.features_buffer) > 0:
+            return self.features_buffer[-1]
+        return {
+            'mfcc': {},
+            'spectrum': {},
+            'timestamp': time.time(),
+            'status': 'no_data'
+        }
 
+    async def stop(self):
+        """Stop processing and cleanup"""
+        self.running = False
+        
+        if self._processing_task:
+            try:
+                await self._processing_task
+            except Exception as e:
+                self.logger.error(f"Error stopping processing task: {e}")
+
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+                self.stream.close()
+            except Exception as e:
+                self.logger.error(f"Error closing audio stream: {e}")
+
+        if self.pa:
+            try:
+                self.pa.terminate()
+            except Exception as e:
+                self.logger.error(f"Error terminating PyAudio: {e}")
+
+        if self.pulse:
+            try:
+                self.pulse.close()
+            except Exception as e:
+                self.logger.error(f"Error closing Pulse connection: {e}")
+
+        self.logger.info("Audio processor stopped")
+
+
+class AudioHandler:
+    """API-compatible audio handler using integrated processor"""
+    
     def __init__(self, rate: int, channels: int, sample_duration: float,
                  mfcc_count: int, buffer_size: int = 3):
         self.logger = get_logger(__name__)
@@ -248,66 +233,21 @@ class AudioHandler:
             mfcc_count=mfcc_count,
             buffer_size=buffer_size
         )
-
-        # Initialize components
-        self.recording_loop = PipewireRecordingLoop(
+        
+        self.processor = IntegratedAudioProcessor(
             rate=rate,
-            channels=channels
+            channels=channels,
+            mfcc_count=mfcc_count,
+            buffer_size=buffer_size
         )
-
-        self.processing_loop = AudioProcessingLoop(
-            rate=rate,
-            mfcc_count=mfcc_count
-        )
-
-        # Connect components
-        self.processing_loop.audio_queue = self.recording_loop.audio_queue
-
-        # Start components
-        asyncio.create_task(self._start())
-
-    async def _start(self):
-        """Start audio processing components"""
-        try:
-            await self.recording_loop.start()
-            await self.processing_loop.start()
-            self.logger.info("Audio handler started successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to start audio handler: {e}")
-            await self._stop()
-            raise
-
-    async def _stop(self):
-        """Stop audio processing components"""
-        try:
-            await self.processing_loop.stop()
-            await self.recording_loop.stop()
-            self.logger.info("Audio handler stopped successfully")
-        except Exception as e:
-            self.logger.error(f"Error stopping audio handler: {e}")
-            raise
-
-    def close(self):
-        """Clean up resources (used during shutdown)"""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                future = asyncio.run_coroutine_threadsafe(self._stop(), loop)
-                future.result(timeout=5)
-            else:
-                loop.run_until_complete(self._stop())
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
+        
+        # Start the processor
+        asyncio.create_task(self.processor.start())
 
     def read_mfcc(self) -> Dict[str, float]:
         """Get latest MFCC features"""
         try:
-            loop = asyncio.get_event_loop()
-            if not self.processing_loop.results_queue.empty():
-                result = loop.run_until_complete(
-                    self.processing_loop.results_queue.get())
-                return result.get('mfcc', {})
-            return {}
+            return self.processor.get_latest_features().get('mfcc', {})
         except Exception as e:
             self.logger.error(f"Error reading MFCC: {e}")
             return {'error': str(e)}
@@ -315,12 +255,7 @@ class AudioHandler:
     def read_spectrum(self) -> Dict[str, float]:
         """Get latest spectrum data"""
         try:
-            loop = asyncio.get_event_loop()
-            if not self.processing_loop.results_queue.empty():
-                result = loop.run_until_complete(
-                    self.processing_loop.results_queue.get())
-                return result.get('spectrum', {})
-            return {}
+            return self.processor.get_latest_features().get('spectrum', {})
         except Exception as e:
             self.logger.error(f"Error reading spectrum: {e}")
             return {'error': str(e)}
@@ -328,31 +263,26 @@ class AudioHandler:
     def read_all_audio(self) -> Dict[str, Any]:
         """Get all audio features"""
         try:
-            loop = asyncio.get_event_loop()
-            if not self.processing_loop.results_queue.empty():
-                result = loop.run_until_complete(
-                    self.processing_loop.results_queue.get())
-                return {
-                    'mfcc': result.get('mfcc', {}),
-                    'spectrum': result.get('spectrum', {}),
-                    'timestamp': result.get('timestamp', time.time()),
-                    'status': 'ok'
-                }
+            features = self.processor.get_latest_features()
             return {
-                'mfcc': {},
-                'spectrum': {},
-                'timestamp': time.time(),
-                'status': 'no_data'
+                'mfcc': features.get('mfcc', {}),
+                'spectrum': features.get('spectrum', {}),
+                'timestamp': features.get('timestamp', time.time()),
+                'status': features.get('status', 'error')
             }
         except Exception as e:
             self.logger.error(f"Error reading audio data: {e}")
             return {
-                'error': str(e),
-                'status': 'error'
+                'mfcc': {},
+                'spectrum': {},
+                'timestamp': time.time(),
+                'status': 'error',
+                'error': str(e)
             }
-            
-class AudioHandlerSettings(BaseModel):
-    """Configuration settings for AudioHandler"""
-    sample_duration: float = Field(..., gt=0, description="Duration of audio sample in seconds")
-    mfcc_count: int = Field(..., gt=0, description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(..., gt=0, description="Size of audio buffer")
+
+    async def close(self):
+        """Cleanup resources"""
+        try:
+            await self.processor.stop()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")

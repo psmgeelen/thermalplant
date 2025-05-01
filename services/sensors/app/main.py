@@ -85,45 +85,42 @@ import time
 async def initialize_audio_handler():
     global audio_sensor
     max_retries = 3
-    retry_delay = 1  # seconds
-    last_exception = None
+    retry_delay = 1
 
     for attempt in range(max_retries):
         try:
-            # If the sensor exists, close it first
             if "audio_sensor" in globals() and audio_sensor is not None:
-                try:
-                    audio_sensor.close()
-                except Exception as e:
-                    logger.warning(f"Error closing existing audio handler: {e}")
+                audio_sensor.close()
 
-            logger.info(f"Audio initialization attempt {attempt+1}/{max_retries} with settings: {audio_settings.dict()}")
+            logger.info(f"Audio initialization attempt {attempt+1}/{max_retries}")
             
             audio_sensor = AudioHandler(
                 rate=AUDIO_RATE,
                 channels=AUDIO_CHANNELS,
                 sample_duration=audio_settings.sample_duration,
                 mfcc_count=audio_settings.mfcc_count,
-                buffer_size=audio_settings.buffer_size,
-                # device_index=72
+                buffer_size=audio_settings.buffer_size
             )
             
-            # If we got here without exception, initialization succeeded
-            logger.info(f"Audio handler successfully initialized (attempt {attempt+1}/{max_retries})")
+            # Wait a bit to see if we're getting audio data
+            await asyncio.sleep(2)
+            
+            # Check if we're getting data
+            mfcc_data = audio_sensor.read_mfcc()
+            if not mfcc_data:
+                raise RuntimeError("No audio data received after initialization")
+                
+            logger.info("Audio handler successfully initialized and receiving data")
             return audio_sensor
             
         except Exception as e:
-            last_exception = e
             logger.warning(f"Audio initialization attempt {attempt+1}/{max_retries} failed: {e}")
             if attempt < max_retries - 1:
-                logger.info(f"Retrying audio initialization in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
-                # Increase delay for next attempt
                 retry_delay *= 1.5
     
-    # If we reached here, all attempts failed
-    logger.error(f"Failed to initialize audio handler after {max_retries} attempts. Last error: {last_exception}")
-    raise RuntimeError(f"Failed to initialize audio handler: {last_exception}")
+    raise RuntimeError("Failed to initialize audio handler")
+
 
 
 # Initialize sensors on startup instead of at module level
