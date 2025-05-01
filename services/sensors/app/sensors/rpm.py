@@ -2,8 +2,9 @@ import time
 import threading
 from collections import deque
 import gpiozero
+from gpiozero.pins.lgpio import LGPIOFactory 
 from pydantic import BaseModel, Field, validator
-from utils import get_logger
+from .utils import get_logger
 
 logger = get_logger(__name__)
 
