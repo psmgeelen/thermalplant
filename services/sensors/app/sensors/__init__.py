@@ -11,9 +11,9 @@ from .temp import TempSensor
 from .rpm import RPMSensor, RPMSensorSettings
 from .audio import (
     AudioHandler,
-    AudioHandlerSettings,
-    PipeWireRecordingLoop,
-    ProcessingLoop
+    AudioHandlerConfig,
+    PipewireRecordingLoop,
+    AudioProcessingLoop
 )
 
 # Define public API for package
@@ -22,7 +22,7 @@ __all__ = [
     'RPMSensor', 
     'RPMSensorSettings',
     'AudioHandler',
-    'AudioHandlerSettings',
-    'PipeWireRecordingLoop',
-    'ProcessingLoop'
+    'AudioHandlerConfig',
+    'PipewireRecordingLoop',
+    'AudioProcessingLoop'
 ]

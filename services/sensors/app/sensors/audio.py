@@ -4,9 +4,9 @@ import librosa
 import logging
 import time
 from typing import Optional, Dict, Any, List
-import pulsectl_async
+import pulsectl_asyncio
 from pydantic import BaseModel, Field
-from utils import get_logger
+from .utils import get_logger
 
 
 class AsyncComponent:
