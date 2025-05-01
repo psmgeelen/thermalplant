@@ -13,20 +13,16 @@ from sensors import (
     AudioHandlerSettings,
     PipeWireRecordingLoop,  # Import the new PipeWire recording class
 )
-import logging
 import math
 import psutil
 import asyncio
 from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
+from log_utils import setup_queue_logging, get_logger, shutdown_logging
 
-# Setup Logger
-logging.basicConfig(
-    format="%(levelname)s - %(asctime)s - %(name)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger("API")
-stream_handler = logging.StreamHandler()
-logger.addHandler(stream_handler)
+# Setup queue-based logging system
+setup_queue_logging(level=logging.INFO)
+logger = get_logger("API")
 
 
 # Init API
@@ -170,6 +166,26 @@ async def startup_event():
         logger.error(f"Audio handler initialization failed: {e}")
         logger.warning("Application will continue WITHOUT audio capabilities")
         audio_sensor = None
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Application shutting down")
+    
+    # First stop all sensors
+    if "rpm_sensor" in globals() and rpm_sensor is not None:
+        try:
+            rpm_sensor.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping RPM sensor during shutdown: {e}")
+    
+    if "audio_sensor" in globals() and audio_sensor is not None:
+        try:
+            audio_sensor.close()
+        except Exception as e:
+            logger.warning(f"Error closing audio handler during shutdown: {e}")
+    
+    # Finally, shutdown logging system to ensure all pending logs are processed
+    shutdown_logging()
 
 
 def my_schema():

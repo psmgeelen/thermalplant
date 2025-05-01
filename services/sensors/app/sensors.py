@@ -5,6 +5,7 @@ import gpiozero
 import logging
 import threading
 from typing import Optional
+from log_utils import get_logger  # Import the new queue-based logger utility
 import numpy as np
 import librosa
 from gpiozero.pins.lgpio import LGPIOFactory
@@ -13,7 +14,7 @@ import pulsectl
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-logger = logging.getLogger("sensors-backend")
+logger = get_logger("sensors-backend")
 # Force gpiozero to use RPi.GPIO as the pin factory
 gpiozero.Device.pin_factory = LGPIOFactory()
 
@@ -822,13 +823,13 @@ class AudioHandler:
                         "maxInputChannels": source.channel_count,
                         "defaultSampleRate": default_rate
                     }
-                    logging.info(f"Found audio device: {device_info}")
+                    logger.info(f"Found audio device: {device_info}")
                     
                     # Match based on name or description
                     if (match_on.lower() in source.name.lower() or 
                         match_on.lower() in source.description.lower()):
                         matches.append(device_info)
-                        logging.info(f"Found a match!: {device_info}")
+                        logger.info(f"Found a match!: {device_info}")
                 
                 # If no matches found, add default source
                 if not matches and sources:
@@ -847,10 +848,10 @@ class AudioHandler:
                                 "defaultSampleRate": default_rate
                             }
                             matches.append(device_info)
-                            logging.info(f"Using default source as fallback: {device_info}")
+                            logger.info(f"Using default source as fallback: {device_info}")
                             break
-        except Exception as e:
-            logging.error(f"Error finding audio devices with PipeWire: {e}")
+                        except Exception as e:
+                            logger.error(f"Error finding audio devices with PipeWire: {e}")
             # As a last resort, if we can't find devices through PipeWire, try to return a default device
             matches.append({"index": 0, "name": "default", "maxInputChannels": 1, "defaultSampleRate": 44100})
             
