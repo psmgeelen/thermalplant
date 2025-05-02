@@ -13,10 +13,10 @@ from .utils import get_logger
 
 class AudioHandlerSettings(BaseModel):
     """Configuration settings for AudioHandler"""
-    sample_duration: float = Field(..., gt=0, description="Duration of audio sample in seconds")
-    mfcc_count: int = Field(..., gt=0, description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(..., gt=0, description="Size of audio buffer")
-    n_bands: int = Field(..., gt=0, description="N of Spectrumbands")
+    sample_duration: float = Field(1.0, gt=0, description="Duration of audio sample in seconds")
+    mfcc_count: int = Field(50, gt=0, description="Number of MFCC coefficients to extract")
+    buffer_size: int = Field(3, gt=0, description="Size of audio buffer")
+    n_bands: int = Field(50, gt=0, description="N of Spectrumbands")
 
 
 class IntegratedAudioProcessor:
@@ -193,7 +193,7 @@ class IntegratedAudioProcessor:
                 if len(freq_indices) > 0:
                     # Calculate mean power for this frequency band across all time frames
                     band_power = np.mean(spectrum_db[freq_indices, :])
-                    band_label = f"band_{i + 1}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
+                    band_label = f"spectrum_{i + 1}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
                     result[band_label] = float(band_power)
 
             return result
