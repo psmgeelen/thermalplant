@@ -16,20 +16,22 @@ class AudioHandlerSettings(BaseModel):
     sample_duration: float = Field(..., gt=0, description="Duration of audio sample in seconds")
     mfcc_count: int = Field(..., gt=0, description="Number of MFCC coefficients to extract")
     buffer_size: int = Field(..., gt=0, description="Size of audio buffer")
+    n_bands: int = Field(..., gt=0, description="N of Spectrumbands")
 
 
 class IntegratedAudioProcessor:
     """Combined audio recording and processing system"""
     
     def __init__(self, rate: float = 44100, channels: int = 1,
-                 device_name: str = "USB", mfcc_count: int = 13,
-                 buffer_size: int = 3, n_fft: int = 2048):
+                 device_name: str = "USB", mfcc_count: int = 50,
+                 buffer_size: int = 3, n_fft: int = 2048, n_bands: int = 50):
         self.logger = get_logger(__name__)
         self.rate = rate
         self.channels = channels
         self.device_name = device_name
         self.mfcc_count = mfcc_count
         self.n_fft = n_fft
+        self.n_bands = n_bands
         
         # Buffers
         self.raw_buffer = deque(maxlen=buffer_size)
@@ -164,18 +166,36 @@ class IntegratedAudioProcessor:
             return {}
 
     async def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
-        """Compute frequency spectrum"""
+        """Compute frequency spectrum bands"""
         try:
+            audio_np = audio_np / np.iinfo(np.int16).max
             D = librosa.stft(audio_np, n_fft=self.n_fft)
             spectrum = np.abs(D)
             spectrum_db = librosa.amplitude_to_db(spectrum, ref=np.max)
-            freqs = librosa.fft_frequencies(sr=self.rate, n_fft=self.n_fft)
-            mean_spectrum = spectrum_db.mean(axis=1)
 
-            return {
-                f"band_{freq:.0f}hz": float(power)
-                for freq, power in zip(freqs, mean_spectrum)
-            }
+            # Calculate frequency bounds for each band
+            freqs = librosa.fft_frequencies(sr=self.rate, n_fft=self.n_fft)
+            max_freq = self.rate / 2  # Nyquist frequency
+            min_freq = 20  # Typical lower bound for audio
+
+            # Use logarithmic spacing for bands (better for audio)
+            band_edges = np.logspace(np.log10(min_freq), np.log10(max_freq), self.n_bands + 1)
+
+            # Calculate mean power for each frequency band
+            result = {}
+            for i in range(self.n_bands):
+                lower_freq = band_edges[i]
+                upper_freq = band_edges[i + 1]
+
+                # Find frequencies that fall within this band
+                mask = (freqs >= lower_freq) & (freqs < upper_freq)
+                if np.any(mask):
+                    band_power = np.mean(spectrum_db[:, mask])
+                    # Create label with band number and frequency range
+                    band_label = f"band_{i + 1}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
+                    result[band_label] = float(band_power)
+
+            return result
         except Exception as e:
             self.logger.error(f"Spectrum computation error: {e}")
             return {}
@@ -227,19 +247,21 @@ class AudioHandler:
     """API-compatible audio handler using integrated processor"""
     
     def __init__(self, rate: int, channels: int, sample_duration: float,
-                 mfcc_count: int, buffer_size: int = 3):
+                 mfcc_count: int, buffer_size: int = 3, n_bands: int = 50):
         self.logger = get_logger(__name__)
         self.settings = AudioHandlerSettings(
             sample_duration=sample_duration,
             mfcc_count=mfcc_count,
-            buffer_size=buffer_size
+            buffer_size=buffer_size,
+            n_bands=n_bands
         )
         
         self.processor = IntegratedAudioProcessor(
             rate=rate,
             channels=channels,
             mfcc_count=mfcc_count,
-            buffer_size=buffer_size
+            buffer_size=buffer_size,
+            n_bands=n_bands
         )
         
         # Start the processor

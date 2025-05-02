@@ -41,6 +41,7 @@ class AudioSettings(BaseModel):
     sample_duration: float = Field(1.0, description="Duration of audio sample in seconds")
     mfcc_count: int = Field(50, description="Number of MFCC coefficients to extract")
     buffer_size: int = Field(3, description="Size of audio buffer")
+    n_bands: int = Field(10, description="Number of frequency bands to use for analysis")
 
 class HealthCheckResponse(BaseModel):
     status: str = Field(..., description="Status of the health check (ok or error)")
@@ -99,7 +100,8 @@ async def initialize_audio_handler():
                 channels=AUDIO_CHANNELS,
                 sample_duration=audio_settings.sample_duration,
                 mfcc_count=audio_settings.mfcc_count,
-                buffer_size=audio_settings.buffer_size
+                buffer_size=audio_settings.buffer_size,
+                n_bands=50,
             )
             
             # Wait a bit to see if we're getting audio data
@@ -344,7 +346,8 @@ async def get_audio_settings(request: Request):
     return AudioHandlerSettings(
         sample_duration=audio_settings.sample_duration,
         mfcc_count=audio_settings.mfcc_count,
-        buffer_size=audio_settings.buffer_size
+        buffer_size=audio_settings.buffer_size,
+        n_bands=audio_settings.n_bands,
     )
 
 
@@ -363,7 +366,8 @@ async def update_audio_settings(request: Request, settings: AudioHandlerSettings
         audio_settings = AudioSettings(
             sample_duration=settings.sample_duration,
             mfcc_count=settings.mfcc_count,
-            buffer_size=settings.buffer_size
+            buffer_size=settings.buffer_size,
+            n_bands=audio_settings.n_bands,
         )
 
         # Reinitialize the audio handler with new settings
@@ -817,6 +821,7 @@ async def _healthcheck_settings_integrity():
             hasattr(audio_settings, 'sample_duration') and audio_settings.sample_duration > 0
             and hasattr(audio_settings, 'mfcc_count') and audio_settings.mfcc_count > 0
             and hasattr(audio_settings, 'buffer_size') and audio_settings.buffer_size > 0
+            and hasattr(audio_settings, 'n_bands') and audio_settings.n_bands > 0
         )
 
         if rpm_valid and audio_valid:
@@ -849,6 +854,8 @@ async def _healthcheck_settings_integrity():
                     audio_issues["mfcc_count"] = "must be positive" 
                 if not hasattr(audio_settings, 'buffer_size') or audio_settings.buffer_size <= 0:
                     audio_issues["buffer_size"] = "must be positive"
+                if not hasattr(audio_settings, 'n_bands') or audio_settings.n_bands <= 0:
+                    audio_issues["n_bands"] = "must be positive"
                     
             logger.warning(f"Settings integrity check failed: {', '.join(issues)}")
             return {
