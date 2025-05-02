@@ -168,7 +168,6 @@ class IntegratedAudioProcessor:
     async def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
         """Compute frequency spectrum bands"""
         try:
-            audio_np = audio_np / np.iinfo(np.int16).max
             D = librosa.stft(audio_np, n_fft=self.n_fft)
             spectrum = np.abs(D)
             spectrum_db = librosa.amplitude_to_db(spectrum, ref=np.max)
@@ -178,7 +177,7 @@ class IntegratedAudioProcessor:
             max_freq = self.rate / 2  # Nyquist frequency
             min_freq = 20  # Typical lower bound for audio
 
-            # Use logarithmic spacing for bands (better for audio)
+            # Use logarithmic spacing for bands
             band_edges = np.logspace(np.log10(min_freq), np.log10(max_freq), self.n_bands + 1)
 
             # Calculate mean power for each frequency band
@@ -187,11 +186,13 @@ class IntegratedAudioProcessor:
                 lower_freq = band_edges[i]
                 upper_freq = band_edges[i + 1]
 
-                # Find frequencies that fall within this band
-                mask = (freqs >= lower_freq) & (freqs < upper_freq)
-                if np.any(mask):
-                    band_power = np.mean(spectrum_db[:, mask])
-                    # Create label with band number and frequency range
+                # Find indices of frequencies that fall within this band
+                freq_mask = (freqs >= lower_freq) & (freqs < upper_freq)
+                freq_indices = np.where(freq_mask)[0]
+
+                if len(freq_indices) > 0:
+                    # Calculate mean power for this frequency band across all time frames
+                    band_power = np.mean(spectrum_db[freq_indices, :])
                     band_label = f"band_{i + 1}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
                     result[band_label] = float(band_power)
 
