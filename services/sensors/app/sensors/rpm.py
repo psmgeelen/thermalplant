@@ -109,13 +109,13 @@ class RPMSensor(object):
 # Define Pydantic models for request/response validation
 class RPMSensorSettings(BaseModel):
     measurement_window: int = Field(
-        ..., description="Window size for measurements (in samples)"
+        100, description="Window size for measurements (in samples)"
     )
     measurement_interval: float = Field(
-        ..., description="Interval between measurements (in seconds)"
+        0.001, description="Interval between measurements (in seconds)"
     )
     sample_size: int = Field(
-        ..., description="Number of samples needed to ensure not skipping a cycle"
+        8, description="Number of samples needed to ensure not skipping a cycle"
     )
 
     @validator("measurement_window")

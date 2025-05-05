@@ -31,18 +31,6 @@ app = FastAPI()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Pydantic models for configuration and health check responses
-class RPMSettings(BaseModel):
-    measurement_window: int = Field(100, description="Measurement window in milliseconds")
-    measurement_interval: float = Field(0.001, description="Interval between measurements in seconds")
-    sample_size: int = Field(8, description="Number of samples to average")
-
-class AudioSettings(BaseModel):
-    sample_duration: float = Field(1.0, description="Duration of audio sample in seconds")
-    mfcc_count: int = Field(50, description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(3, description="Size of audio buffer")
-    n_bands: int = Field(10, description="Number of frequency bands to use for analysis")
-
 class HealthCheckResponse(BaseModel):
     status: str = Field(..., description="Status of the health check (ok or error)")
     details: Dict[str, Any] = Field(default_factory=dict, description="Additional health check details")
@@ -101,7 +89,7 @@ async def initialize_audio_handler():
                 sample_duration=audio_settings.sample_duration,
                 mfcc_count=audio_settings.mfcc_count,
                 buffer_size=audio_settings.buffer_size,
-                n_bands=50,
+                n_bands=audio_settings.n_bands,
             )
             
             # Wait a bit to see if we're getting audio data

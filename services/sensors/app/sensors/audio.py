@@ -193,7 +193,7 @@ class IntegratedAudioProcessor:
                 if len(freq_indices) > 0:
                     # Calculate mean power for this frequency band across all time frames
                     band_power = np.mean(spectrum_db[freq_indices, :])
-                    band_label = f"spectrum_{i + 1}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
+                    band_label = f"spectrum_{i}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
                     result[band_label] = float(band_power)
 
             return result
