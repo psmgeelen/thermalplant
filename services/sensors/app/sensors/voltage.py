@@ -138,7 +138,7 @@ class VoltageSensorSettings(BaseModel):
         10, description="Number of samples needed for reliable measurement"
     )
     gain: int = Field(
-        16, description="ADS1115 PGA gain setting (1, 2, 4, 8, or 16)"
+        8, description="ADS1115 PGA gain setting (1, 2, 4, 8, or 16)"
     )
 
     @validator("i2c_address")

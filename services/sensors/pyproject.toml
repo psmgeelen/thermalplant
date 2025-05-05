@@ -26,6 +26,7 @@ lgpio = "^0.2.2.0"
 psutil = "^7.0.0"
 pulsectl-asyncio = "^1.2.2"
 pulsectl = "24.11.0"
+adafruit-circuitpython-ads1x15 = "^2.4.2"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -14,6 +14,7 @@ from .audio import (
     AudioHandlerSettings,
     IntegratedAudioProcessor,
 )
+from .voltage import VoltageSensor, VoltageSensorSettings
 
 # Define public API for package
 __all__ = [
@@ -23,4 +24,6 @@ __all__ = [
     'AudioHandler',
     'AudioHandlerSettings',
     'IntegratedAudioProcessor',
+    'VoltageSensor',
+    'VoltageSensorSettings',
 ]
