@@ -129,10 +129,10 @@ class VoltageSensorSettings(BaseModel):
         0, description="ADC channel to read from (0-3)"
     )
     measurement_window: int = Field(
-        100, description="Window size for measurements (in samples)"
+        10, description="Window size for measurements (in samples)"
     )
     measurement_interval: float = Field(
-        0.01, description="Interval between measurements (in seconds)"
+        0.1, description="Interval between measurements (in seconds)"
     )
     sample_size: int = Field(
         10, description="Number of samples needed for reliable measurement"
