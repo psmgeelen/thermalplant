@@ -9,7 +9,12 @@ Contains implementations for various sensors:
 # Import sensor classes from individual modules
 from .temp import TempSensor
 from .rpm import RPMSensor, RPMSensorSettings
-from .audio import (
+# from .audio import (
+#     AudioHandler,
+#     AudioHandlerSettings,
+#     IntegratedAudioProcessor,
+# )
+from .audio_gpu import (
     AudioHandler,
     AudioHandlerSettings,
     IntegratedAudioProcessor,
