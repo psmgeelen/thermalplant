@@ -10,7 +10,6 @@ from .utils import get_logger
 
 logger = get_logger(__name__)
 
-
 class VoltageSensor(object):
 
     def __init__(
@@ -18,7 +17,6 @@ class VoltageSensor(object):
             measurement_interval: float,
             measurement_window: int,
             sample_size: int,
-            gain: int = 8,  # Default to highest gain (16x) for small signals
             i2c_address: int = 0x48,
             adc_channel: int = 0,
     ):
@@ -27,10 +25,48 @@ class VoltageSensor(object):
         self.measurement_interval = measurement_interval
         self.measurement_window = measurement_window
         self.sample_size = sample_size
-        self.gain = gain
+        self.gain = 2/3  # Start with the lowest gain to avoid overloading the ADC
+        self.max_voltage = 6.144  # Default max voltage for gain 2/3
         self.measurements = deque(maxlen=self.measurement_window)
         self.running = False  # Flag to control the measurement thread
         self._start_measurement_thread()
+
+    def _adjust_gain(self, last_voltage):
+        """
+        Adjust the gain dynamically based on the most recent measurement.
+        If the voltage is above 80% of the current max voltage, zoom out (decrease gain).
+        If the voltage is too low (below 80%), zoom in (increase gain).
+        """
+        # Gain settings and their corresponding max voltage ranges
+        gain_settings = {
+            2/3: 6.144,  # +/-6.144V
+            1: 4.096,    # +/-4.096V
+            2: 2.048,    # +/-2.048V
+            4: 1.024,    # +/-1.024V
+            8: 0.512,    # +/-0.512V
+            16: 0.256    # +/-0.256V
+        }
+
+        # Determine the 80% threshold
+        threshold = 0.8 * self.max_voltage
+
+        # Zoom in or out based on the measurement
+        if last_voltage > threshold:
+            # Zoom out (lower gain)
+            for gain, voltage_range in sorted(gain_settings.items(), reverse=True):
+                if voltage_range >= last_voltage:
+                    self.gain = gain
+                    self.max_voltage = voltage_range
+                    logger.info(f"Zoomed out: new gain is {self.gain}x")
+                    break
+        elif last_voltage < threshold:
+            # Zoom in (increase gain)
+            for gain, voltage_range in sorted(gain_settings.items()):
+                if voltage_range <= last_voltage:
+                    self.gain = gain
+                    self.max_voltage = voltage_range
+                    logger.info(f"Zoomed in: new gain is {self.gain}x")
+                    break
 
     def _start_measurement_thread(self):
         """
@@ -51,9 +87,9 @@ class VoltageSensor(object):
             i2c = busio.I2C(board.SCL, board.SDA)
             ads = ADS.ADS1115(i2c, address=self.i2c_address)
             
-            # Set PGA gain (possible values are 2/3, 1, 2, 4, 8, 16)
+            # Set PGA gain dynamically
             ads.gain = self.gain
-            logger.info(f"ADS1115 initialized with gain setting: {self.gain}x")
+            logger.info(f"ADS1115 initialized with dynamic gain setting: {self.gain}x")
             
             # Available voltage ranges based on gain
             gain_ranges = {
@@ -83,6 +119,9 @@ class VoltageSensor(object):
                         "time_ns": time.time_ns(),
                         "time": time.time()
                     })
+
+                    # Adjust gain based on the latest measurement
+                    self._adjust_gain(voltage)
 
                     count += 1
 
@@ -137,9 +176,6 @@ class VoltageSensorSettings(BaseModel):
     sample_size: int = Field(
         10, description="Number of samples needed for reliable measurement"
     )
-    gain: int = Field(
-        8, description="ADS1115 PGA gain setting (1, 2, 4, 8, or 16)"
-    )
 
     @validator("i2c_address")
     def validate_i2c_address(cls, v):
@@ -169,11 +205,4 @@ class VoltageSensorSettings(BaseModel):
     def validate_sample_size(cls, v):
         if v <= 0:
             raise ValueError("sample_size must be positive")
-        return v
-
-    @validator("gain")
-    def validate_gain(cls, v):
-        valid_gains = [1, 2, 4, 8, 16]
-        if v not in valid_gains:
-            raise ValueError(f"Gain must be one of {valid_gains}")
         return v

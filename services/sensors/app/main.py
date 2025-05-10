@@ -87,7 +87,6 @@ async def initialize_voltage_sensor():
             measurement_interval = voltage_settings.measurement_interval,
             measurement_window = voltage_settings.measurement_window,
             sample_size = voltage_settings.sample_size, 
-            gain = voltage_settings.gain,  # Default to highest gain (16x) for small signals
         )
         logger.info(f"Voltage sensor initialized with settings: {voltage_settings.dict()}")
         return voltage_sensor

@@ -93,7 +93,7 @@ services:
       - infrastructure
       - fullstack
   cadvisor:
-    image: bitnami/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:latest
     platform: linux/arm64
     restart: always
     network_mode: host
@@ -102,6 +102,8 @@ services:
       - /var/run:/var/run:rw
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /etc/machine-id:/etc/machine-id:ro
     profiles:
       - infrastructure
       - fullstack
