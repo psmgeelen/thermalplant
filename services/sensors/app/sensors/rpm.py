@@ -27,6 +27,7 @@ class RPMSensor(object):
         self.measurements = deque(maxlen=self.measurement_window)
         self.running = False  # Flag to control the measurement thread
         self._start_measurement_thread()
+        self.prior_state_count = 0
 
     def _start_measurement_thread(self):
         """
@@ -43,7 +44,6 @@ class RPMSensor(object):
         Reads the state of the GPIO pin and adds this measurement to self.measurements.
         """
         prior_state = None
-        prior_state_count = 0
         pin = gpiozero.InputDevice(self.gpiopin)
         while self.running:  # Check self.running to allow clean shutdown
             try:
@@ -60,10 +60,10 @@ class RPMSensor(object):
                             f"Only {prior_state_count} readings "
                             f"for measurement, please increase measurement_interval"
                         )
-                    prior_state_count = 0
+                    self.prior_state_count = 0
 
                 if prior_state is state:
-                    prior_state_count += 1
+                    self.prior_state_count += 1
 
                 prior_state = state
 
@@ -96,14 +96,18 @@ class RPMSensor(object):
 
         timens = [m["time_ns"] for m in self.measurements]
 
-        # One revolution means 01-01-01-01 because we have 4 blades that we detect or not.
-        # One revolution there is 8 entries. So the time for 1 revolution is the first and
-        # last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
-        # so if i have a list of 200 items, I have 25 revolutions.
-        # The time difference between first and last item therefore needs to be devided
-        # 25 revolutions
-        revolution_time_ns = (timens[-1] - timens[0]) / (len(self.measurements) / 8)
-        rpm = (60 * 1e9) / revolution_time_ns
+        if self.prior_state_count > 100:
+            # if the prior state hasn't changed for 100 measurements, we assume its not changing at all, rpms => 0
+            rpm = 0
+        else:
+            # One revolution means 01-01-01-01 because we have 4 blades that we detect or not.
+            # One revolution there is 8 entries. So the time for 1 revolution is the first and
+            # last item, devided by length of the list (e.g. 200 items) multiplied by 8 entries
+            # so if i have a list of 200 items, I have 25 revolutions.
+            # The time difference between first and last item therefore needs to be devided
+            # 25 revolutions
+            revolution_time_ns = (timens[-1] - timens[0]) / (len(self.measurements) / 8)
+            rpm = (60 * 1e9) / revolution_time_ns
         return rpm
 
 # Define Pydantic models for request/response validation
