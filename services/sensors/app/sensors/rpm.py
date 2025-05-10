@@ -55,9 +55,9 @@ class RPMSensor(object):
                     self.measurements.append(
                         {"state": state, "time_ns": time.time_ns(), "time": time.time()}
                     )
-                    if prior_state_count < self.sample_size:
+                    if self.prior_state_count < self.sample_size:
                         logger.warning(
-                            f"Only {prior_state_count} readings "
+                            f"Only {self.prior_state_count} readings "
                             f"for measurement, please increase measurement_interval"
                         )
                     self.prior_state_count = 0
@@ -95,9 +95,15 @@ class RPMSensor(object):
             return 0
 
         timens = [m["time_ns"] for m in self.measurements]
-
-        if self.prior_state_count > 100:
+        
+         # If we have no state-change in 1 seconds, then we assume that we no rotation
+         # This means with 4 blades that dont measure below 8 RPM.
+        
+        rpm_is_zero = 1 / self.measurement_interval
+        
+        if self.prior_state_count > rpm_is_zero:
             # if the prior state hasn't changed for 100 measurements, we assume its not changing at all, rpms => 0
+            logger.info(f"rpm is low, state has been consistent for {self.prior_state_count} measurements, and there is larger then {rpm_is_zero}")
             rpm = 0
         else:
             # One revolution means 01-01-01-01 because we have 4 blades that we detect or not.
