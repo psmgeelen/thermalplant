@@ -107,7 +107,23 @@ services:
     profiles:
       - infrastructure
       - fullstack
-    
+
+  postrgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter
+    restart: always
+    environment:
+      - DATA_SOURCE_URI=localhost:5432/metrics?sslmode=disable
+      - DATA_SOURCE_USER=${POSTGRES_USER} 
+      - DATA_SOURCE_PASS=${POSTGRES_PASSWORD}
+    network_mode: host
+    profiles:
+      - infrastructure
+      - fullstack
+    depends_on:
+      prometheus:
+        condition: service_started
+      database:
+        condition: service_healthy
   twingate_connector:
     container_name: ${CONTAINER_NAME1}
     image: twingate/connector:latest

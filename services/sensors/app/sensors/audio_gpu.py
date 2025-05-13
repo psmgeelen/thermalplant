@@ -107,8 +107,9 @@ class IntegratedAudioProcessor:
         if self.running:
             try:
                 audio_data = np.frombuffer(in_data, dtype=np.float32)
-                self.raw_buffer.append(audio_data)
-                rms = np.sqrt(np.mean(np.square(audio_data)))
+                amplified_audio_data = audio_data * 2
+                self.raw_buffer.append(amplified_audio_data)
+                rms = np.sqrt(np.mean(np.square(amplified_audio_data)))
                 self.logger.debug(f"Audio RMS level: {rms:.6f}")
             except Exception as e:
                 self.logger.error(f"Error in audio callback: {e}")
