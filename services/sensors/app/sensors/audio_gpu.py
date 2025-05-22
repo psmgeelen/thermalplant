@@ -107,7 +107,7 @@ class IntegratedAudioProcessor:
         if self.running:
             try:
                 audio_data = np.frombuffer(in_data, dtype=np.float32)
-                amplified_audio_data = audio_data * 2
+                amplified_audio_data = audio_data
                 self.raw_buffer.append(amplified_audio_data)
                 rms = np.sqrt(np.mean(np.square(amplified_audio_data)))
                 self.logger.debug(f"Audio RMS level: {rms:.6f}")

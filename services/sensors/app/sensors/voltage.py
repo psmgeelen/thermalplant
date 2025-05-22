@@ -110,22 +110,21 @@ class VoltageSensor(object):
 
             while self.running:
                 try:
-                    # Read voltage from ADC (already amplified by PGA hardware)
                     voltage = chan.voltage
-                    
-                    # Append the measurement with timestamp
+
                     self.measurements.append({
                         "voltage": voltage,
                         "time_ns": time.time_ns(),
                         "time": time.time()
                     })
 
-                    # Adjust gain based on the latest measurement
                     self._adjust_gain(voltage)
 
-                    count += 1
+                    # Update hardware config after gain change
+                    ads.gain = self.gain
+                    chan = AnalogIn(ads, getattr(ADS, f'P{self.adc_channel}'))
 
-                    # Make sure we have enough samples
+                    count += 1
                     if count >= self.sample_size and len(self.measurements) < self.sample_size:
                         logger.warning(
                             f"Only {len(self.measurements)} readings "
@@ -136,6 +135,7 @@ class VoltageSensor(object):
                     logger.error(f"Error during voltage measurement: {e}")
 
                 time.sleep(self.measurement_interval)
+
 
         except Exception as e:
             logger.error(f"Failed to initialize ADS1115: {e}")
@@ -171,7 +171,7 @@ class VoltageSensorSettings(BaseModel):
         10, description="Window size for measurements (in samples)"
     )
     measurement_interval: float = Field(
-        0.1, description="Interval between measurements (in seconds)"
+        0.5, description="Interval between measurements (in seconds)"
     )
     sample_size: int = Field(
         10, description="Number of samples needed for reliable measurement"
