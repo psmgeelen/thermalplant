@@ -22,7 +22,7 @@ class AudioHandlerSettings(BaseModel):
 class IntegratedAudioProcessor:
     def __init__(self, rate: float = 44100, channels: int = 1,
                  device_name: str = "USB", mfcc_count: int = 50,
-                 buffer_size: int = 3, n_fft: int = 2048, n_bands: int = 50):
+                 buffer_size: int = 3, n_fft: int = 8192, n_bands: int = 50):
         self.logger = get_logger(__name__)
         self.rate = rate
         self.channels = channels
@@ -46,7 +46,12 @@ class IntegratedAudioProcessor:
         self.mfcc_transform = torchaudio.transforms.MFCC(
             sample_rate=self.rate,
             n_mfcc=self.mfcc_count,
-            melkwargs={"n_fft": self.n_fft, "hop_length": 512}
+            melkwargs={
+                "n_fft": self.n_fft,
+                "hop_length": 1024,
+                "f_min": 1.0,  # Start from 1Hz instead of default 0
+                "f_max": self.rate / 2,
+            }
         )
         self.spectrogram_transform = torchaudio.transforms.Spectrogram(
             n_fft=self.n_fft,
@@ -156,7 +161,7 @@ class IntegratedAudioProcessor:
             spectrogram_db = 10 * torch.log10(spectrogram + 1e-10)
 
             freqs = torch.fft.rfftfreq(self.n_fft, 1 / self.rate)
-            min_freq = 20
+            min_freq = 1
             max_freq = self.rate / 2
             band_edges = torch.logspace(
                 start=torch.log10(torch.tensor(min_freq, dtype=torch.float32)),
