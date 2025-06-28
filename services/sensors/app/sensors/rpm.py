@@ -122,7 +122,7 @@ class RPMSensorSettings(BaseModel):
         100, description="Window size for measurements (in samples)"
     )
     measurement_interval: float = Field(
-        0.0001, description="Interval between measurements (in seconds)"
+        0.00001, description="Interval between measurements (in seconds)"
     )
     sample_size: int = Field(
         8, description="Number of samples needed to ensure not skipping a cycle"
