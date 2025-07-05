@@ -1,20 +1,15 @@
-FROM python:3.12-alpine
-
-RUN pip install poetry==1.8.3
-
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_IN_PROJECT=1 \
-    POETRY_VIRTUALENVS_CREATE=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+FROM ghcr.io/astral-sh/uv:python3.12-alpine
 
 WORKDIR /app
-COPY app/ ./
-COPY pyproject.toml poetry.lock ./
 
-RUN apk update && apk add python3-dev \
-        gcc \
-        libc-dev
+# Copy project config and code
+COPY pyproject.toml ./
+COPY app/ .
 
-RUN poetry install --without dev --no-root
+# Install deps (using PEP 621 project layout)
+RUN apk add --no-cache build-base && \
+    uv sync --no-cache \
+    && apk del build-base
 
-ENTRYPOINT ["poetry", "run", "python", "main.py"]
+# Run the app
+ENTRYPOINT ["uv", "run", "python", "main.py"]
