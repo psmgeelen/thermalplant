@@ -49,14 +49,22 @@ class IntegratedAudioProcessor:
             melkwargs={
                 "n_fft": self.n_fft,
                 "hop_length": 1024,
-                "f_min": 1.0,  # Start from 1Hz instead of default 0
+                "f_min": 1.0,  # Start from 1Hz instead of 0
                 "f_max": self.rate / 2,
             }
         )
-        self.spectrogram_transform = torchaudio.transforms.Spectrogram(
+
+        # Use MelSpectrogram instead of raw Spectrogram for better frequency bands
+        self.mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.rate,
             n_fft=self.n_fft,
+            hop_length=1024,
+            n_mels=self.n_bands,
+            f_min=1.0,
+            f_max=self.rate / 2,
             power=2.0
         )
+        self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB(stype='power')
 
     async def start(self):
         try:
@@ -78,13 +86,17 @@ class IntegratedAudioProcessor:
         self.logger.info("Available audio sources:")
         for source in sources:
             self.logger.info(f"  - {source.name}")
+            print(source.name)
 
         device_index = None
         for i in range(self.pa.get_device_count()):
             device_info = self.pa.get_device_info_by_index(i)
+            print(device_info['name'])
+            print(device_info['maxInputChannels'])
             if (self.device_name in device_info['name'] and
                 device_info['maxInputChannels'] > 0):
                 self.logger.info(f"found match with: {device_info}")
+                print(f"found match with: {device_info}")
                 device_index = i
                 break
 
@@ -143,12 +155,10 @@ class IntegratedAudioProcessor:
         try:
             waveform = torch.tensor(audio_np, dtype=torch.float32).unsqueeze(0)
             mfcc = self.mfcc_transform(waveform).mean(dim=-1).squeeze(0)
-
-            mel_freqs = torch.linspace(0, self.rate / 2, steps=self.mfcc_count)
-
+            # Label MFCCs simply by index
             return {
-                f"mfcc_{i}_{freq.item():.0f}hz": float(mfcc[i].item())
-                for i, freq in enumerate(mel_freqs)
+                f"mfcc_{i}": float(mfcc[i].item())
+                for i in range(mfcc.shape[0])
             }
 
         except Exception as e:
@@ -158,30 +168,14 @@ class IntegratedAudioProcessor:
     async def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
         try:
             waveform = torch.tensor(audio_np, dtype=torch.float32).unsqueeze(0)
-            spectrogram = self.spectrogram_transform(waveform)[0]
-            spectrogram_db = 10 * torch.log10(spectrogram + 1e-10)
-
-            freqs = torch.fft.rfftfreq(self.n_fft, 1 / self.rate)
-            min_freq = 1
-            max_freq = self.rate / 2
-            band_edges = torch.logspace(
-                start=torch.log10(torch.tensor(min_freq, dtype=torch.float32)),
-                end=torch.log10(torch.tensor(max_freq, dtype=torch.float32)),
-                steps=self.n_bands + 1
-            )
+            mel_spectrogram = self.mel_spectrogram_transform(waveform)
+            spectrogram_db = self.amplitude_to_db(mel_spectrogram).squeeze(0)
 
             result = {}
             for i in range(self.n_bands):
-                lower_freq = band_edges[i].item()
-                upper_freq = band_edges[i + 1].item()
-
-                mask = (freqs >= lower_freq) & (freqs < upper_freq)
-                indices = mask.nonzero(as_tuple=True)[0]
-
-                if len(indices) > 0:
-                    band_power = spectrogram_db[indices, :].mean().item()
-                    label = f"spectrum_{i}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
-                    result[label] = band_power
+                band_power = spectrogram_db[i, :].mean().item()
+                label = f"spectrum_{i}_mel_band"
+                result[label] = band_power
 
             return result
 
@@ -228,6 +222,7 @@ class IntegratedAudioProcessor:
                 self.logger.error(f"Error closing Pulse connection: {e}")
 
         self.logger.info("Audio processor stopped")
+
 
 class AudioHandler:
     """API-compatible audio handler using integrated processor"""
