@@ -178,7 +178,7 @@ class Scraper(object):
             value DOUBLE PRECISION, -- Sensor value
             PRIMARY KEY (timestamp, sensorname) -- Composite key on timestamp and sensorname
         );"""
-        ddl_hypertable = """SELECT create_hypertable('sensor_data', 'timestamp', chunk_time_interval => interval '12 hours', migrate_data => true);"""
+        ddl_hypertable = """SELECT create_hypertable('sensor_data', 'timestamp', chunk_time_interval => interval '5 mins', migrate_data => true);"""
 
         # Create procedure to enforce max 100,000 rows
         create_procedure = """
