@@ -245,7 +245,7 @@ async def ping():
     summary="Retrieve temperature readings from the upper thermal segment sensor",
     description="",
     response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_model=float,
 )
 @limiter.limit("1000/minute")
 async def get_temperature_upper(
@@ -263,7 +263,7 @@ async def get_temperature_upper(
         "return the definition of the DeviceEmulator class"
     ),
     response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_model=float,
 )
 @limiter.limit("1000/minute")
 async def get_temperature_lower(

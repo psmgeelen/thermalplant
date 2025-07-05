@@ -21,7 +21,7 @@ dependencies = [
     "gpiozero==2.0.1",
     "spidev==3.6",
     "librosa==0.10.2.post1",
-    "pyaudio==0.2.11",
+    "pyaudio>=0.2.14",
     "lgpio==0.2.2.0",
     "psutil==7.0.0",
     "pulsectl-asyncio==1.2.2",
