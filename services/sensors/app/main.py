@@ -1,4 +1,5 @@
 import os
+import time
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.openapi.utils import get_openapi
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -12,6 +13,8 @@ from sensors import (
     RPMSensorSettings,
     AudioHandler,
     AudioHandlerSettings,
+    VoltageSensor, 
+    VoltageSensorSettings, 
     utils
 )
 import math
@@ -31,29 +34,19 @@ app = FastAPI()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Pydantic models for configuration and health check responses
-class RPMSettings(BaseModel):
-    measurement_window: int = Field(100, description="Measurement window in milliseconds")
-    measurement_interval: float = Field(0.001, description="Interval between measurements in seconds")
-    sample_size: int = Field(8, description="Number of samples to average")
-
-class AudioSettings(BaseModel):
-    sample_duration: float = Field(1.0, description="Duration of audio sample in seconds")
-    mfcc_count: int = Field(50, description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(3, description="Size of audio buffer")
-
 class HealthCheckResponse(BaseModel):
     status: str = Field(..., description="Status of the health check (ok or error)")
     details: Dict[str, Any] = Field(default_factory=dict, description="Additional health check details")
 
 # Fixed sensor parameters
 GPIO_PIN = 22
-AUDIO_RATE = 32767
+AUDIO_RATE = 44100
 AUDIO_CHANNELS = 1
 
 # Configurable sensor parameters with defaults
-rpm_settings = RPMSettings()
-audio_settings = AudioSettings()
+rpm_settings = RPMSensorSettings()
+voltage_settings = VoltageSensorSettings()
+audio_settings = AudioHandlerSettings()
 
 
 # Initialize sensors with current settings
@@ -79,25 +72,39 @@ async def initialize_rpm_sensor():
         logger.error(f"Error initializing RPM sensor: {e}")
         raise
 
+# Initialize sensors with current settings
+async def initialize_voltage_sensor():
+    global voltage_sensor
+    try:
+        # If the sensor exists, close/stop it first
+        if "voltage_sensor" in globals() and voltage_sensor is not None:
+            try:
+                voltage_sensor.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping existing Voltage sensor: {e}")
 
-import time
+        voltage_sensor = VoltageSensor(
+            measurement_interval = voltage_settings.measurement_interval,
+            measurement_window = voltage_settings.measurement_window,
+            sample_size = voltage_settings.sample_size, 
+        )
+        logger.info(f"Voltage sensor initialized with settings: {voltage_settings.dict()}")
+        return voltage_sensor
+    except Exception as e:
+        logger.error(f"Error initializing Voltage sensor: {e}")
+        raise
 
 async def initialize_audio_handler():
     global audio_sensor
-    max_retries = 10
-    retry_delay = 1  # seconds
-    last_exception = None
+    max_retries = 3
+    retry_delay = 1
 
     for attempt in range(max_retries):
         try:
-            # If the sensor exists, close it first
             if "audio_sensor" in globals() and audio_sensor is not None:
-                try:
-                    audio_sensor.close()
-                except Exception as e:
-                    logger.warning(f"Error closing existing audio handler: {e}")
+                audio_sensor.close()
 
-            logger.info(f"Audio initialization attempt {attempt+1}/{max_retries} with settings: {audio_settings.dict()}")
+            logger.info(f"Audio initialization attempt {attempt+1}/{max_retries}")
             
             audio_sensor = AudioHandler(
                 rate=AUDIO_RATE,
@@ -105,33 +112,41 @@ async def initialize_audio_handler():
                 sample_duration=audio_settings.sample_duration,
                 mfcc_count=audio_settings.mfcc_count,
                 buffer_size=audio_settings.buffer_size,
+                n_bands=audio_settings.n_bands,
             )
             
-            # If we got here without exception, initialization succeeded
-            logger.info(f"Audio handler successfully initialized (attempt {attempt+1}/{max_retries})")
+            # Wait a bit to see if we're getting audio data
+            await asyncio.sleep(2)
+            
+            # Check if we're getting data
+            mfcc_data = audio_sensor.read_mfcc()
+            if not mfcc_data:
+                raise RuntimeError("No audio data received after initialization")
+                
+            logger.info("Audio handler successfully initialized and receiving data")
             return audio_sensor
             
         except Exception as e:
-            last_exception = e
             logger.warning(f"Audio initialization attempt {attempt+1}/{max_retries} failed: {e}")
             if attempt < max_retries - 1:
-                logger.info(f"Retrying audio initialization in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
-                # Increase delay for next attempt
                 retry_delay *= 1.5
     
-    # If we reached here, all attempts failed
-    logger.error(f"Failed to initialize audio handler after {max_retries} attempts. Last error: {last_exception}")
-    raise RuntimeError(f"Failed to initialize audio handler: {last_exception}")
+    raise RuntimeError("Failed to initialize audio handler")
+
 
 
 # Initialize sensors on startup instead of at module level
 rpm_sensor = None
+voltage_sensor = None
 audio_sensor = None
 
 # Dependency injection functions
 def get_rpm_sensor():
     return rpm_sensor
+
+def get_voltage_sensor():
+    return voltage_sensor
 
 def get_audio_sensor():
     if audio_sensor is None:
@@ -157,8 +172,9 @@ async def get_temp_sensor_lower():
 
 @app.on_event("startup")
 async def startup_event():
-    global rpm_sensor, audio_sensor
+    global rpm_sensor, audio_sensor, voltage_sensor
     rpm_sensor = await initialize_rpm_sensor()
+    voltage_sensor = await initialize_voltage_sensor()
     
     try:
         audio_sensor = await initialize_audio_handler()
@@ -229,7 +245,7 @@ async def ping():
     summary="Retrieve temperature readings from the upper thermal segment sensor",
     description="",
     response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_model=float,
 )
 @limiter.limit("1000/minute")
 async def get_temperature_upper(
@@ -247,7 +263,7 @@ async def get_temperature_upper(
         "return the definition of the DeviceEmulator class"
     ),
     response_description="A dictionary with a list of devices",
-    response_model=str,
+    response_model=float,
 )
 @limiter.limit("1000/minute")
 async def get_temperature_lower(
@@ -300,7 +316,7 @@ async def update_rpm_settings(request: Request, settings: RPMSensorSettings):
     try:
         # Update the global settings
         global rpm_settings
-        rpm_settings = RPMSettings(
+        rpm_settings = RPMSensorSettings(
             measurement_window=settings.measurement_window,
             measurement_interval=settings.measurement_interval,
             sample_size=settings.sample_size
@@ -316,6 +332,68 @@ async def update_rpm_settings(request: Request, settings: RPMSensorSettings):
             status_code=500, detail=f"Failed to update RPM sensor settings: {str(e)}"
         )
 
+
+@app.get(
+    "/voltage",
+    summary="Retrieve real-time Voltage measurement from thermal-electrical generator",
+    description=("Retrieve real-time Voltage measurement from thermal-electrical generator"),
+    response_description="Current Voltage",
+    response_model=float,
+)
+@limiter.limit("1000/minute")
+async def get_voltage(
+    request: Request,
+    rpm_sensor: VoltageSensor = Depends(get_voltage_sensor),
+):
+    return voltage_sensor.read_voltage()
+
+
+@app.get(
+    "/voltage/settings",
+    summary="Get Voltage sensor settings",
+    description="Returns the current configuration settings for the Voltage sensor",
+    response_description="Dictionary containing the Voltage sensor settings",
+    response_model=VoltageSensorSettings,
+)
+@limiter.limit("100/minute")
+async def get_voltage_settings(request: Request):
+    return VoltageSensorSettings(
+        measurement_window=voltage_settings.measurement_window,
+        measurement_interval=voltage_settings.measurement_interval,
+        sample_size=voltage_settings.sample_size
+    )
+
+
+@app.put(
+    "/voltage/settings",
+    summary="Update Voltage sensor settings",
+    description="Update the configuration settings for the Voltage sensor and reinitialize it",
+    response_description="Dictionary containing the updated Voltage sensor settings",
+    response_model=VoltageSensorSettings,
+)
+@limiter.limit("20/minute")
+async def update_voltage_settings(request: Request, settings: VoltageSensorSettings):
+    try:
+        # Update the global settings
+        global voltage_settings
+        voltageS_settings = VoltageSensorSettings(
+            measurement_window=settings.measurement_window,
+            measurement_interval=settings.measurement_interval,
+            sample_size=settings.sample_size
+        )
+
+        # Reinitialize the sensor with new settings
+        await initialize_voltage_sensor()
+
+        return settings
+    except Exception as e:
+        logger.error(f"Failed to update RPM sensor settings: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update RPM sensor settings: {str(e)}"
+        )
+
+
+####
 
 @app.get(
     "/mfcc",
@@ -346,7 +424,8 @@ async def get_audio_settings(request: Request):
     return AudioHandlerSettings(
         sample_duration=audio_settings.sample_duration,
         mfcc_count=audio_settings.mfcc_count,
-        buffer_size=audio_settings.buffer_size
+        buffer_size=audio_settings.buffer_size,
+        n_bands=audio_settings.n_bands,
     )
 
 
@@ -362,10 +441,11 @@ async def update_audio_settings(request: Request, settings: AudioHandlerSettings
     try:
         # Update the global settings
         global audio_settings
-        audio_settings = AudioSettings(
+        audio_settings = AudioHandlerSettings(
             sample_duration=settings.sample_duration,
             mfcc_count=settings.mfcc_count,
-            buffer_size=settings.buffer_size
+            buffer_size=settings.buffer_size,
+            n_bands=audio_settings.n_bands,
         )
 
         # Reinitialize the audio handler with new settings
@@ -646,6 +726,46 @@ async def _healthcheck_rpm_sensor():
         logger.error(f"RPM sensor healthcheck failed: {str(e)}")
         return {"status": "error", "details": {"message": str(e)}}
 
+async def _healthcheck_voltage_sensor():
+    """
+    Verifies that the Voltage sensor is operational and providing plausible readings.
+
+    The Voltage Sensor operates via the I2C protocol and measures the ouptut of the 
+    thermal-electrical generator. Failures in this sensor
+    could prevent early detection of mechanical issues, potentially leading to
+    catastrophic failures if components are operating outside of specification.
+
+    Returns:
+        HealthCheckResponse: Status and details of the health check
+    """
+    try:
+        voltage_sensor_instance = get_voltage_sensor()
+        if voltage_sensor_instance is None:
+            return {
+                "status": "error", 
+                "details": {"message": "Voltage sensor not initialized"}
+            }
+            
+        voltage = voltage_sensor_instance.read_voltage()
+
+        # Check if RPM is a number and within a reasonable range
+        # The exact range depends on your application - adjust as needed
+        # For example, 0-10000 RPM might be reasonable for many fans/motors
+        if isinstance(voltage, (int, float)) and 0 <= voltage <= 10:
+            return {"status": "ok", "details": {"voltage": voltage}}
+        else:
+            logger.warning(f"Voltage sensor reading out of range: {voltage}")
+            return {
+                "status": "error",
+                "details": {
+                    "message": "Voltage reading out of acceptable range, consider changing the amplification",
+                    "voltage": voltage
+                }
+            }
+    except Exception as e:
+        logger.error(f"Voltage sensor healthcheck failed: {str(e)}")
+        return {"status": "error", "details": {"message": str(e)}}
+
 
 async def _healthcheck_audio_sensor():
     """
@@ -814,11 +934,19 @@ async def _healthcheck_settings_integrity():
             and hasattr(rpm_settings, 'sample_size') and rpm_settings.sample_size > 0
         )
 
+
+        voltage_valid = (
+            hasattr(voltage_settings, 'measurement_window') and voltage_settings.measurement_window > 0
+            and hasattr(voltage_settings, 'measurement_interval') and voltage_settings.measurement_interval > 0
+            and hasattr(voltage_settings, 'sample_size') and voltage_settings.sample_size > 0
+        )
+        
         # Check audio settings using Pydantic model attributes
         audio_valid = (
             hasattr(audio_settings, 'sample_duration') and audio_settings.sample_duration > 0
             and hasattr(audio_settings, 'mfcc_count') and audio_settings.mfcc_count > 0
             and hasattr(audio_settings, 'buffer_size') and audio_settings.buffer_size > 0
+            and hasattr(audio_settings, 'n_bands') and audio_settings.n_bands > 0
         )
 
         if rpm_valid and audio_valid:
@@ -826,7 +954,8 @@ async def _healthcheck_settings_integrity():
                 "status": "ok",
                 "details": {
                     "rpm_settings": "valid", 
-                    "audio_settings": "valid"
+                    "audio_settings": "valid",
+                    "voltage_settings": "valid",
                 }
             }
         else:
@@ -842,6 +971,15 @@ async def _healthcheck_settings_integrity():
                     rpm_issues["measurement_interval"] = "must be positive"
                 if not hasattr(rpm_settings, 'sample_size') or rpm_settings.sample_size <= 0:
                     rpm_issues["sample_size"] = "must be positive"
+
+            if not voltage_valid:
+                issues.append("Voltage settings invalid")
+                if not hasattr(voltage_settings, 'measurement_window') or voltage_settings.measurement_window <= 0:
+                    rpm_issues["measurement_window"] = "must be positive"
+                if not hasattr(voltage_settings, 'measurement_interval') or voltage_settings.measurement_interval <= 0:
+                    rpm_issues["measurement_interval"] = "must be positive"
+                if not hasattr(voltage_settings, 'sample_size') or voltage_settings.sample_size <= 0:
+                    rpm_issues["sample_size"] = "must be positive"
                     
             if not audio_valid:
                 issues.append("Audio settings invalid")
@@ -851,6 +989,8 @@ async def _healthcheck_settings_integrity():
                     audio_issues["mfcc_count"] = "must be positive" 
                 if not hasattr(audio_settings, 'buffer_size') or audio_settings.buffer_size <= 0:
                     audio_issues["buffer_size"] = "must be positive"
+                if not hasattr(audio_settings, 'n_bands') or audio_settings.n_bands <= 0:
+                    audio_issues["n_bands"] = "must be positive"
                     
             logger.warning(f"Settings integrity check failed: {', '.join(issues)}")
             return {
@@ -933,6 +1073,15 @@ app.add_api_route(
     summary="Check RPM sensor status",
     description="Verifies that the RPM sensor is operational and providing plausible readings.",
     response_description="Returns HTTP 200 if the RPM sensor is functioning correctly.",
+    response_model=Dict[str, Any]
+)
+
+app.add_api_route(
+    "/health/voltage",
+    async_health_dependency([_healthcheck_voltage_sensor]),
+    summary="Check Voltage sensor status",
+    description="Verifies that the Voltage sensor is operational and providing plausible readings.",
+    response_description="Returns HTTP 200 if the Voltage sensor is functioning correctly.",
     response_model=Dict[str, Any]
 )
 

@@ -9,12 +9,17 @@ Contains implementations for various sensors:
 # Import sensor classes from individual modules
 from .temp import TempSensor
 from .rpm import RPMSensor, RPMSensorSettings
-from .audio import (
+# from .audio import (
+#     AudioHandler,
+#     AudioHandlerSettings,
+#     IntegratedAudioProcessor,
+# )
+from .audio_gpu import (
     AudioHandler,
     AudioHandlerSettings,
-    PipeWireRecordingLoop,
-    ProcessingLoop
+    IntegratedAudioProcessor,
 )
+from .voltage import VoltageSensor, VoltageSensorSettings
 
 # Define public API for package
 __all__ = [
@@ -23,6 +28,7 @@ __all__ = [
     'RPMSensorSettings',
     'AudioHandler',
     'AudioHandlerSettings',
-    'PipeWireRecordingLoop',
-    'ProcessingLoop'
+    'IntegratedAudioProcessor',
+    'VoltageSensor',
+    'VoltageSensorSettings',
 ]
