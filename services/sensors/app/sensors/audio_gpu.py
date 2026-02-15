@@ -1,30 +1,28 @@
 from collections import deque
 import asyncio
 import numpy as np
-import librosa
+import torch
+import torchaudio
 import pyaudio
 import pulsectl
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pydantic import BaseModel, Field
 from .utils import get_logger
 
 
 class AudioHandlerSettings(BaseModel):
-    """Configuration settings for AudioHandler"""
-    sample_duration: float = Field(1.0, gt=0, description="Duration of audio sample in seconds")
-    mfcc_count: int = Field(50, gt=0, description="Number of MFCC coefficients to extract")
-    buffer_size: int = Field(3, gt=0, description="Size of audio buffer")
-    n_bands: int = Field(50, gt=0, description="N of Spectrumbands")
+    sample_duration: float = Field(1.0, gt=0)
+    mfcc_count: int = Field(50, gt=0)
+    buffer_size: int = Field(3, gt=0)
+    n_bands: int = Field(50, gt=0)
 
 
 class IntegratedAudioProcessor:
-    """Combined audio recording and processing system"""
-    
     def __init__(self, rate: float = 44100, channels: int = 1,
                  device_name: str = "USB", mfcc_count: int = 50,
-                 buffer_size: int = 3, n_fft: int = 2048, n_bands: int = 50):
+                 buffer_size: int = 3, n_fft: int = 8192, n_bands: int = 50):
         self.logger = get_logger(__name__)
         self.rate = rate
         self.channels = channels
@@ -32,54 +30,73 @@ class IntegratedAudioProcessor:
         self.mfcc_count = mfcc_count
         self.n_fft = n_fft
         self.n_bands = n_bands
-        
-        # Buffers
+
         self.raw_buffer = deque(maxlen=buffer_size)
         self.features_buffer = deque(maxlen=buffer_size)
-        
-        # Audio handling
-        self.chunk_size = int(rate)  # 1-second chunks
+
+        self.chunk_size = int(rate)
         self.pa = None
         self.pulse = None
         self.stream = None
-        
-        # State
+
         self.running = False
         self._processing_task = None
 
+        # Torch transforms
+        self.mfcc_transform = torchaudio.transforms.MFCC(
+            sample_rate=self.rate,
+            n_mfcc=self.mfcc_count,
+            melkwargs={
+                "n_fft": self.n_fft,
+                "hop_length": 1024,
+                "f_min": 1.0,  # Start from 1Hz instead of 0
+                "f_max": self.rate / 2,
+            }
+        )
+
+        # Use MelSpectrogram instead of raw Spectrogram for better frequency bands
+        self.mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.rate,
+            n_fft=self.n_fft,
+            hop_length=1024,
+            n_mels=self.n_bands,
+            f_min=1.0,
+            f_max=self.rate / 2,
+            power=2.0
+        )
+        self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB(stype='power')
+
     async def start(self):
-        """Initialize and start audio processing"""
         try:
-            # Initialize audio
             self.pulse = pulsectl.Pulse('device-detector')
             self.pa = pyaudio.PyAudio()
-            
-            # Find and set up device
             await self._setup_audio_device()
-            
+
             self.running = True
             self._processing_task = asyncio.create_task(self._process_loop())
             self.logger.info("Audio processor started")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to start audio processor: {e}")
             await self.stop()
             raise
 
     async def _setup_audio_device(self):
-        """Set up audio device and stream"""
         sources = self.pulse.source_list()
         self.logger.info("Available audio sources:")
         for source in sources:
             self.logger.info(f"  - {source.name}")
+            print(source.name)
 
-        # Try to find specified device
         device_index = None
         for i in range(self.pa.get_device_count()):
             device_info = self.pa.get_device_info_by_index(i)
-            if (self.device_name in device_info['name'] and 
+            print(device_info['name'])
+            print(device_info['maxInputChannels'])
+            if (self.device_name in device_info['name'] and
                 device_info['maxInputChannels'] > 0):
                 self.logger.info(f"found match with: {device_info}")
+                print(f"found match with: {device_info}")
                 device_index = i
                 break
 
@@ -96,114 +113,78 @@ class IntegratedAudioProcessor:
             frames_per_buffer=self.chunk_size,
             stream_callback=self._audio_callback
         )
-        
+
         self.logger.info(f"Audio stream opened: device_index={device_index}, "
-                        f"rate={self.rate}, channels={self.channels}")
+                         f"rate={self.rate}, channels={self.channels}")
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
-        """Handle incoming audio data"""
         if status:
             self.logger.warning(f"Audio callback status: {status}")
-        
+
         if self.running:
             try:
                 audio_data = np.frombuffer(in_data, dtype=np.float32)
-                self.raw_buffer.append(audio_data)
-                
-                # Log audio levels
-                rms = np.sqrt(np.mean(np.square(audio_data)))
+                amplified_audio_data = audio_data
+                self.raw_buffer.append(amplified_audio_data)
+                rms = np.sqrt(np.mean(np.square(amplified_audio_data)))
                 self.logger.debug(f"Audio RMS level: {rms:.6f}")
-                
+                print(f"Audio RMS level: {rms:.6f}")
             except Exception as e:
                 self.logger.error(f"Error in audio callback: {e}")
-                
+
         return (None, pyaudio.paContinue)
 
     async def _process_loop(self):
-        """Process audio data from the buffer"""
         while self.running:
             try:
-                if len(self.raw_buffer) > 0:
+                if self.raw_buffer:
                     audio_data = self.raw_buffer[-1]
-                    
                     features = {
                         'mfcc': await self._compute_mfcc(audio_data),
                         'spectrum': await self._compute_spectrum(audio_data),
                         'timestamp': time.time(),
                         'status': 'ok'
                     }
-                    
                     self.features_buffer.append(features)
-                    
                 await asyncio.sleep(0.1)
-                    
             except Exception as e:
                 self.logger.error(f"Processing error: {e}")
                 await asyncio.sleep(1)
 
     async def _compute_mfcc(self, audio_np: np.ndarray) -> Dict[str, float]:
-        """Compute MFCC features"""
         try:
-            mfccs = librosa.feature.mfcc(
-                y=audio_np,
-                sr=self.rate,
-                n_mfcc=self.mfcc_count,
-                n_fft=self.n_fft
-            )
-
-            mel_freqs = librosa.mel_frequencies(
-                n_mels=self.mfcc_count,
-                fmin=0,
-                fmax=self.rate / 2
-            )
-
+            waveform = torch.tensor(audio_np, dtype=torch.float32).unsqueeze(0)
+            mfcc = self.mfcc_transform(waveform).mean(dim=-1).squeeze(0)
+            # Label MFCCs simply by index
             return {
-                f"mfcc_{i}_{freq:.0f}hz": float(mfcc)
-                for i, (freq, mfcc) in enumerate(zip(mel_freqs, mfccs.mean(axis=1)))
+                f"mfcc_{i}": float(mfcc[i].item())
+                for i in range(mfcc.shape[0])
             }
+
         except Exception as e:
             self.logger.error(f"MFCC computation error: {e}")
             return {}
 
     async def _compute_spectrum(self, audio_np: np.ndarray) -> Dict[str, float]:
-        """Compute frequency spectrum bands"""
         try:
-            D = librosa.stft(audio_np, n_fft=self.n_fft)
-            spectrum = np.abs(D)
-            spectrum_db = librosa.amplitude_to_db(spectrum, ref=np.max)
+            waveform = torch.tensor(audio_np, dtype=torch.float32).unsqueeze(0)
+            mel_spectrogram = self.mel_spectrogram_transform(waveform)
+            spectrogram_db = self.amplitude_to_db(mel_spectrogram).squeeze(0)
 
-            # Calculate frequency bounds for each band
-            freqs = librosa.fft_frequencies(sr=self.rate, n_fft=self.n_fft)
-            max_freq = self.rate / 2  # Nyquist frequency
-            min_freq = 20  # Typical lower bound for audio
-
-            # Use logarithmic spacing for bands
-            band_edges = np.logspace(np.log10(min_freq), np.log10(max_freq), self.n_bands + 1)
-
-            # Calculate mean power for each frequency band
             result = {}
             for i in range(self.n_bands):
-                lower_freq = band_edges[i]
-                upper_freq = band_edges[i + 1]
-
-                # Find indices of frequencies that fall within this band
-                freq_mask = (freqs >= lower_freq) & (freqs < upper_freq)
-                freq_indices = np.where(freq_mask)[0]
-
-                if len(freq_indices) > 0:
-                    # Calculate mean power for this frequency band across all time frames
-                    band_power = np.mean(spectrum_db[freq_indices, :])
-                    band_label = f"spectrum_{i}_{lower_freq:.0f}hz_{upper_freq:.0f}hz"
-                    result[band_label] = float(band_power)
+                band_power = spectrogram_db[i, :].mean().item()
+                label = f"spectrum_{i}_mel_band"
+                result[label] = band_power
 
             return result
+
         except Exception as e:
             self.logger.error(f"Spectrum computation error: {e}")
             return {}
 
     def get_latest_features(self) -> Dict[str, Any]:
-        """Get the most recent processed features"""
-        if len(self.features_buffer) > 0:
+        if self.features_buffer:
             return self.features_buffer[-1]
         return {
             'mfcc': {},
@@ -213,9 +194,8 @@ class IntegratedAudioProcessor:
         }
 
     async def stop(self):
-        """Stop processing and cleanup"""
         self.running = False
-        
+
         if self._processing_task:
             try:
                 await self._processing_task

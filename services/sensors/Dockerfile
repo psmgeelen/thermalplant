@@ -1,15 +1,10 @@
-FROM python:3.12-slim-bookworm
-
-RUN pip install poetry==1.8.3
-
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_IN_PROJECT=1 \
-    POETRY_VIRTUALENVS_CREATE=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock ./
+# Copy project config and code
+COPY pyproject.toml ./
+COPY app/ .
 
 # Install system dependencies including those needed for GPIO
 RUN apt update && apt install -y \
@@ -19,18 +14,8 @@ RUN apt update && apt install -y \
         libportaudio2 \
         portaudio19-dev \
         curl\
-        pipewire pipewire-audio-client-libraries libspa-0.2-modules pipewire-bin
+        pipewire pipewire-audio-client-libraries libspa-0.2-modules pipewire-bin && \
+        uv sync --extra cpu --no-cache && \
+        rm -rf /var/lib/apt/lists/*
 
-
-## AI Assistant
-
-
-
-    
-RUN poetry install --without dev --no-root
-
-# Copy application code after dependencies are installed
-COPY app/ /app
-
-
-CMD ["poetry", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8123", "--reload"]
+CMD ["uv", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8123", "--reload"]

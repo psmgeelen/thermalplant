@@ -1,19 +1,15 @@
-[tool.poetry]
+[project]
 name = "opc-server"
 version = "0.1.0"
-description = "For both the upper and lower sensor of the setup"
-authors = ["Pieter Geelen <pieter@geelen.io>"]
+description = "OPC Server setup for scraping metrics from API Server"
+authors = [{ name = "Pieter Geelen", email = "pieter@geelen.io" }]
 license = "MIT"
-readme = "README.md"
+requires-python = ">=3.12"
 
-[tool.poetry.dependencies]
-python = "^3.12"
-asyncua = "^1.1.5"
-requests = "^2.32.3"
+dependencies = [
+  "asyncua==1.1.5",
+  "requests==2.32.3"
+]
 
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.8.5"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[project.optional-dependencies]
+dev = ["ruff==0.8.5"]
